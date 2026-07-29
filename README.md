@@ -138,26 +138,8 @@ docker exec -it icloudharbor icloudharbor setup
 
 验证码必须在出现 `验证码:` 提示后输入。请勿把验证码直接当作 shell 命令输入。
 
-### 4. 先预览，再同步
-
-生成只读计划：
-
-```bash
-docker exec -it icloudharbor icloudharbor sync plan
-```
-
-确认待下载数量和预计数据量后正式执行：
-
-```bash
-docker exec -it icloudharbor icloudharbor sync run
-```
-
-查看最近同步：
-
-```bash
-docker exec icloudharbor icloudharbor sync status
-docker exec icloudharbor icloudharbor status
-```
+认证完成后，容器会按照 `config.yaml` 中的调度设置自动同步，不需要再手动执行预览或同步
+命令。需要立即同步、查看计划或排查状态时，再使用后文的运维命令。
 
 ## 群晖示例
 

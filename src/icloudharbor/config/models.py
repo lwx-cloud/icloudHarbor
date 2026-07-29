@@ -220,14 +220,9 @@ class NotificationChannelConfig(StrictModel):
         if self.type == "telegram" and (not self.token_file or not self.chat_id):
             raise ValueError("Telegram 通知必须配置 token_file 和 chat_id")
         if self.type == "wecom" and (
-            not self.corp_id
-            or not self.corp_secret_file
-            or not self.agent_id
-            or not self.to_user
+            not self.corp_id or not self.corp_secret_file or not self.agent_id or not self.to_user
         ):
-            raise ValueError(
-                "企业微信通知必须配置 corp_id、corp_secret_file、agent_id 和 to_user"
-            )
+            raise ValueError("企业微信通知必须配置 corp_id、corp_secret_file、agent_id 和 to_user")
         if self.type == "webhook" and not self.url:
             raise ValueError("Webhook 通知必须配置 url")
         return self

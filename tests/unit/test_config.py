@@ -62,9 +62,7 @@ def test_v01_requires_exactly_one_enabled_account(account_config: AccountConfig)
         AppConfig(version=1, accounts=[disabled])
 
 
-@pytest.mark.parametrize(
-    "channel_type", ["bark", "serverchan", "telegram", "wecom", "webhook"]
-)
+@pytest.mark.parametrize("channel_type", ["bark", "serverchan", "telegram", "wecom", "webhook"])
 def test_enabled_notification_channels_require_credentials(channel_type: str) -> None:
     with pytest.raises(ValidationError):
         NotificationChannelConfig(type=channel_type)
