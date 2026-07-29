@@ -22,7 +22,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.1.1`，支持：
+当前版本为 `0.1.2`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`。
@@ -75,10 +75,10 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 ### 根目录
 
 - `Dockerfile`：多阶段生产镜像；构建依赖与运行镜像分离。
-- `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置持久化卷、最小能力、健康检查和
-  日志轮转。
+- `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置必需参数与持久化卷。
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
+- `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
 - `.env.example`：仅保留首次启动必填 Apple ID 的最小 Docker 参数模板，不包含密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
 - `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
@@ -190,7 +190,7 @@ docker build .
 - 已在 Synology Docker 环境完成真实 Apple Account 双重认证和个人图库下载闭环。
 - 已验证中国大陆服务区域、星号密码输入、Session 续期、配置自动生成和下载目录保护。
 - 已验证真实日期范围样本能完成照片资源下载。
-- 2026-07-29 发布检查：70 项自动化测试全部通过，代码覆盖率 79%。
+- 2026-07-29 发布检查：74 项自动化测试全部通过，代码覆盖率 80%。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。

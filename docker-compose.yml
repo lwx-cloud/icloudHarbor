@@ -11,84 +11,14 @@ services:
       IH_PGID: "${IH_PGID:-1000}"
       IH_UMASK: "${IH_UMASK:-0022}"
       IH_CONFIG_FILE: /config/config.yaml
-      IH_LOG_LEVEL: "${IH_LOG_LEVEL:-}"
-      IH_LOG_FORMAT: "${IH_LOG_FORMAT:-}"
 
-      # 单账号 Docker 快速配置。留空时使用自动生成值或现有 config.yaml。
-      IH_ACCOUNT_ID: "${IH_ACCOUNT_ID:-}"
-      IH_ACCOUNT_NAME: "${IH_ACCOUNT_NAME:-}"
+      # 首次启动必填；其他参数按需从 CONFIGURATION.md 添加。
       IH_APPLE_ID: "${IH_APPLE_ID:-}"
       IH_REGION: "${IH_REGION:-}"
       IH_DESTINATION: "${IH_DESTINATION:-}"
-      IH_MOUNTED_MARKER: "${IH_MOUNTED_MARKER:-}"
-      IH_MINIMUM_FREE_SPACE: "${IH_MINIMUM_FREE_SPACE:-}"
-
-      IH_DOWNLOAD_PHOTOS: "${IH_DOWNLOAD_PHOTOS:-}"
-      IH_DOWNLOAD_VIDEOS: "${IH_DOWNLOAD_VIDEOS:-}"
-      IH_DOWNLOAD_LIVE_PHOTOS: "${IH_DOWNLOAD_LIVE_PHOTOS:-}"
-      IH_PHOTO_VERSION: "${IH_PHOTO_VERSION:-}"
-      IH_RAW_MODE: "${IH_RAW_MODE:-}"
-
-      IH_CREATED_AFTER: "${IH_CREATED_AFTER:-}"
-      IH_CREATED_BEFORE: "${IH_CREATED_BEFORE:-}"
-      IH_FAVORITES_ONLY: "${IH_FAVORITES_ONLY:-}"
-      IH_INCLUDE_HIDDEN: "${IH_INCLUDE_HIDDEN:-}"
-
-      IH_FOLDER_STRUCTURE: "${IH_FOLDER_STRUCTURE:-}"
-      IH_FILENAME_TEMPLATE: "${IH_FILENAME_TEMPLATE:-}"
-      IH_CONFLICT_POLICY: "${IH_CONFLICT_POLICY:-}"
-      IH_KEEP_UNICODE: "${IH_KEEP_UNICODE:-}"
-
-      # IH_SCHEDULE（5 段 Cron）和 IH_SYNC_INTERVAL（例如 6h）二选一。
-      IH_SYNC_STRATEGY: "${IH_SYNC_STRATEGY:-}"
-      IH_FULL_SCAN_INTERVAL: "${IH_FULL_SCAN_INTERVAL:-}"
-      IH_SCHEDULE: "${IH_SCHEDULE:-}"
       IH_SYNC_INTERVAL: "${IH_SYNC_INTERVAL:-}"
       IH_RUN_ON_START: "${IH_RUN_ON_START:-}"
-
-      IH_DOWNLOAD_CONCURRENCY: "${IH_DOWNLOAD_CONCURRENCY:-}"
-      IH_CHUNK_SIZE: "${IH_CHUNK_SIZE:-}"
-      IH_DOWNLOAD_TIMEOUT: "${IH_DOWNLOAD_TIMEOUT:-}"
-      IH_MAX_RETRIES: "${IH_MAX_RETRIES:-}"
-      IH_VERIFY_HASH: "${IH_VERIFY_HASH:-}"
-      IH_KEEP_PARTIAL: "${IH_KEEP_PARTIAL:-}"
-
-      IH_NOTIFY_STARTUP: "${IH_NOTIFY_STARTUP:-}"
-      IH_NOTIFY_SUCCESS: "${IH_NOTIFY_SUCCESS:-}"
-      IH_NOTIFY_NO_CHANGES: "${IH_NOTIFY_NO_CHANGES:-}"
-      IH_NOTIFY_FAILURE: "${IH_NOTIFY_FAILURE:-}"
-      IH_NOTIFY_AUTH_REQUIRED: "${IH_NOTIFY_AUTH_REQUIRED:-}"
 
     volumes:
       - "${IH_CONFIG_PATH:-./data/config}:/config"
       - "${IH_PHOTOS_PATH:-./data/photos}:/photos"
-
-    security_opt:
-      - no-new-privileges:true
-
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETGID
-      - SETUID
-
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'exec /usr/sbin/gosu "$${IH_PUID:-1000}:$${IH_PGID:-1000}" icloudharbor healthcheck --liveness',
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-    stop_grace_period: 60s
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"

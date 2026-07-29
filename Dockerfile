@@ -25,7 +25,7 @@ RUN apt-get update \
     && useradd --uid 1000 --gid 1000 --home-dir /nonexistent --no-create-home \
         --shell /usr/sbin/nologin icloudharbor
 
-ENV PATH="/app/.venv/bin:${PATH}" \
+ENV PATH="/usr/local/bin:/app/.venv/bin:${PATH}" \
     HOME=/config \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -33,7 +33,8 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 
 COPY --from=builder /app/.venv /app/.venv
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+COPY docker/icloudharbor-cli.sh /usr/local/bin/icloudharbor
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/icloudharbor \
     && mkdir -p \
         /config/credentials /config/database /config/sessions /config/locks /config/tmp /photos \
     && chown -R icloudharbor:icloudharbor /config
