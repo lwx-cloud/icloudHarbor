@@ -192,7 +192,7 @@ class AccountConfig(StrictModel):
 
 
 class NotificationChannelConfig(StrictModel):
-    type: Literal["bark", "serverchan", "telegram", "webhook"]
+    type: Literal["bark", "serverchan", "telegram", "wecom", "webhook"]
     enabled: bool = True
     server: HttpUrl | None = None
     url: HttpUrl | None = None
@@ -200,6 +200,12 @@ class NotificationChannelConfig(StrictModel):
     send_key_file: Path | None = None
     token_file: Path | None = None
     chat_id: str | None = None
+    corp_id: str | None = None
+    corp_secret_file: Path | None = None
+    agent_id: Annotated[int, Field(gt=0)] | None = None
+    to_user: str | None = None
+    content_source_url: HttpUrl | None = None
+    name: str | None = None
     secret_file: Path | None = None
     timeout: Annotated[int, Field(ge=1, le=60)] = 10
 
@@ -213,6 +219,15 @@ class NotificationChannelConfig(StrictModel):
             raise ValueError("Server酱通知必须配置 send_key_file")
         if self.type == "telegram" and (not self.token_file or not self.chat_id):
             raise ValueError("Telegram 通知必须配置 token_file 和 chat_id")
+        if self.type == "wecom" and (
+            not self.corp_id
+            or not self.corp_secret_file
+            or not self.agent_id
+            or not self.to_user
+        ):
+            raise ValueError(
+                "企业微信通知必须配置 corp_id、corp_secret_file、agent_id 和 to_user"
+            )
         if self.type == "webhook" and not self.url:
             raise ValueError("Webhook 通知必须配置 url")
         return self

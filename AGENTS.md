@@ -22,7 +22,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.1.0`，支持：
+当前版本为 `0.1.1`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`。
@@ -34,7 +34,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - Cron 或固定间隔调度、启动时同步、增量游标与定期全量扫描。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版选择。
 - 日期、收藏、隐藏项目筛选。
-- Bark、Server酱、Telegram 和通用 Webhook 通知。
+- 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 - amd64 与 arm64 Docker 构建。
 
 明确未支持：
@@ -79,7 +79,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
   日志轮转。
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
-- `.env.example`：单账号 Docker 参数模板，不包含密码。
+- `.env.example`：仅保留首次启动必填 Apple ID 的最小 Docker 参数模板，不包含密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
 - `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
   触发的 Docker Hub 发布。
@@ -114,7 +114,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `database/session.py`：SQLite 连接、WAL、外键和完整性检查。
 - `scheduler/service.py`：Cron/间隔任务与启动时任务。
 - `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥。
-- `notify/base.py`：通知事件路由和四种通知通道。
+- `notify/base.py`：通知事件路由和五种通知通道。
 - `observability/logging.py`：文本/JSON 结构化日志。
 - `observability/health.py`：存活与就绪检查。
 

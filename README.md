@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.1.0`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 当前版本为 `0.1.1`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
 > 第一次正式使用前请先运行只读计划，并保留其他可靠备份。
 
 ## 功能
@@ -26,7 +26,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 - 并发流式下载、断点续传、指数退避、大小/SHA-256 校验和原子落盘。
 - SQLite 状态库、运行记录、数据库备份和三层并发锁。
 - 挂载标记、剩余空间、inode、写权限和数据库完整性保护。
-- Bark、Server酱、Telegram 和通用 Webhook 通知。
+- 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 - 支持 `linux/amd64` 和 `linux/arm64`。
 
 ## 当前限制
@@ -70,10 +70,16 @@ id -u
 id -g
 ```
 
-编辑 `.env`，至少修改：
+编辑 `.env`。首次启动唯一必填项是：
 
 ```dotenv
 IH_APPLE_ID=your-account@example.com
+```
+
+其他参数不要整份复制，请从
+[`CONFIGURATION.md`](CONFIGURATION.md) 的完整参数表中按需添加。常见宿主机参数示例：
+
+```dotenv
 IH_PUID=1000
 IH_PGID=1000
 IH_TIMEZONE=Asia/Shanghai
@@ -164,7 +170,7 @@ mkdir -p /volume2/photos/iCloud/personal
 touch /volume2/photos/iCloud/personal/.icloudharbor-mounted
 ```
 
-项目目录中的 `.env` 示例：
+项目目录中的 `.env` 示例；第一项必填，其余项按群晖实际路径和用户添加：
 
 ```dotenv
 IH_CONTAINER_NAME=icloudharbor

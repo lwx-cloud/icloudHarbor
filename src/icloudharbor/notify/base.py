@@ -81,6 +81,8 @@ class NotifierHub:
                     response = self._serverchan(client, channel, event)
                 elif channel.type == "telegram":
                     response = self._telegram(client, channel, event)
+                elif channel.type == "wecom":
+                    response = self._wecom(client, channel, event)
                 else:
                     response = self._webhook(client, channel, event)
             return DeliveryResult(
@@ -134,6 +136,69 @@ class NotifierHub:
             f"https://api.telegram.org/bot{quote(token, safe='')}/sendMessage",
             json={"chat_id": channel.chat_id, "text": f"{event.title}\n\n{event.message}"},
         )
+
+    @staticmethod
+    def _wecom(
+        client: httpx.Client,
+        channel: NotificationChannelConfig,
+        event: NotificationEvent,
+    ) -> httpx.Response:
+        if (
+            not channel.corp_id
+            or not channel.corp_secret_file
+            or not channel.agent_id
+            or not channel.to_user
+        ):
+            raise ValueError("企业微信缺少 corp_id、corp_secret_file、agent_id 或 to_user")
+
+        server = str(channel.server or "https://qyapi.weixin.qq.com").rstrip("/")
+        secret = read_secret(channel.corp_secret_file)
+        token_response = client.get(
+            f"{server}/cgi-bin/gettoken",
+            params={"corpid": channel.corp_id, "corpsecret": secret},
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        access_token = token_payload.get("access_token")
+        if token_payload.get("errcode", 0) != 0 or not isinstance(access_token, str):
+            raise ValueError("企业微信 access token 获取失败")
+
+        content = f"{event.title}\n\n{event.message}"
+        if channel.name:
+            content = f"{channel.name}\n{content}"
+        message: dict[str, object] = {
+            "touser": channel.to_user,
+            "agentid": channel.agent_id,
+            "safe": 0,
+            "enable_id_trans": 0,
+            "enable_duplicate_check": 1,
+            "duplicate_check_interval": 1800,
+        }
+        if channel.content_source_url:
+            message.update(
+                {
+                    "msgtype": "textcard",
+                    "textcard": {
+                        "title": event.title,
+                        "description": content,
+                        "url": str(channel.content_source_url),
+                        "btntxt": "查看详情",
+                    },
+                }
+            )
+        else:
+            message.update({"msgtype": "text", "text": {"content": content}})
+
+        response = client.post(
+            f"{server}/cgi-bin/message/send",
+            params={"access_token": access_token},
+            json=message,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("errcode", 0) != 0:
+            raise ValueError("企业微信消息发送失败")
+        return response
 
     @staticmethod
     def _webhook(
