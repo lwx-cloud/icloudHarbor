@@ -13,6 +13,11 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.13-slim AS runtime
 
+LABEL org.opencontainers.image.title="iCloudHarbor" \
+    org.opencontainers.image.description="Reliable iCloud Photos backup for Linux and NAS" \
+    org.opencontainers.image.source="https://github.com/lwx-cloud/icloudHarbor" \
+    org.opencontainers.image.licenses="MIT"
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates gosu tini tzdata \
     && rm -rf /var/lib/apt/lists/* \

@@ -1,8 +1,6 @@
 services:
   icloudharbor:
-    build:
-      context: .
-    image: icloudharbor:local
+    image: lwxcloud/icloudharbor:latest
     container_name: "${IH_CONTAINER_NAME:-icloudharbor}"
     restart: unless-stopped
 

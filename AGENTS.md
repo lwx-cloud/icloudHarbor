@@ -75,11 +75,14 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 ### 根目录
 
 - `Dockerfile`：多阶段生产镜像；构建依赖与运行镜像分离。
-- `docker-compose.yml`：容器参数、持久化卷、最小能力、健康检查和日志轮转。
+- `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置持久化卷、最小能力、健康检查和
+  日志轮转。
+- `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `.env.example`：单账号 Docker 参数模板，不包含密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
-- `.github/workflows/ci.yml`：Python 3.12/3.13 检查和 amd64/arm64 镜像构建。
+- `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
+  触发的 Docker Hub 发布。
 - `tests/`：单元和集成测试，不连接真实 Apple 服务。
 
 ### `src/icloudharbor`

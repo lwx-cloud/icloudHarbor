@@ -1,0 +1,5 @@
+services:
+  icloudharbor:
+    build:
+      context: .
+    image: icloudharbor:local

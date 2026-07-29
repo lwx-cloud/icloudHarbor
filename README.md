@@ -6,6 +6,8 @@
 iCloudHarbor 是一个面向 Linux 和 NAS 的 iCloud Photos Docker 备份工具。它在容器中定时
 读取个人 iCloud 图库，把照片、视频、Live Photo 和 RAW 资源可靠地保存到本地磁盘。
 
+Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux/arm64`。
+
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
@@ -83,7 +85,7 @@ IH_TIMEZONE=Asia/Shanghai
 sudo chown -R 1000:1000 ./data/config ./data/photos
 ```
 
-### 2. 构建并启动
+### 2. 拉取并启动
 
 先检查 Compose 最终配置：
 
@@ -91,16 +93,28 @@ sudo chown -R 1000:1000 ./data/config ./data/photos
 docker compose config
 ```
 
-构建并启动：
+如果 Docker Hub 仓库当前为私有，先登录一次：
 
 ```bash
-docker compose build --pull
+docker login
+```
+
+拉取镜像并启动：
+
+```bash
+docker compose pull
 docker compose up -d
 docker compose ps
 ```
 
 首次启动会生成 `./data/config/config.yaml`。已有配置文件不会被覆盖；非空 `IH_*`
 环境变量会在运行时覆盖对应 YAML 值。
+
+需要从当前源码进行本地构建时，使用开发覆盖文件：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ### 3. 完成 Apple 认证
 
@@ -232,11 +246,11 @@ docker compose logs --tail=200 icloudharbor
 
 ## 更新
 
-建议先备份整个配置目录，然后更新源码并重建镜像：
+建议先备份整个配置目录，然后更新部署文件并拉取新镜像：
 
 ```bash
 git pull --ff-only
-docker compose build --pull
+docker compose pull
 docker compose up -d --remove-orphans
 docker exec icloudharbor icloudharbor doctor
 ```
