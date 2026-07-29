@@ -19,7 +19,7 @@ def masked_password_prompt(prompt: str) -> str:
     sys.stdout.write(prompt)
     sys.stdout.flush()
     if os.name == "nt":
-        import msvcrt
+        msvcrt: Any = importlib.import_module("msvcrt")
 
         return _read_masked(msvcrt.getwch, _write)
 
