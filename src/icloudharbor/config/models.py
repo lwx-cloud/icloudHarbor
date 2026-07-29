@@ -206,6 +206,11 @@ class NotificationChannelConfig(StrictModel):
     to_user: str | None = None
     content_source_url: HttpUrl | None = None
     name: str | None = None
+    media_id_download: str | None = None
+    media_id_startup: str | None = None
+    media_id_warning: str | None = None
+    media_id_expiration: str | None = None
+    media_id_delete: str | None = None
     secret_file: Path | None = None
     timeout: Annotated[int, Field(ge=1, le=60)] = 10
 
@@ -231,9 +236,10 @@ class NotificationChannelConfig(StrictModel):
 class NotificationsConfig(StrictModel):
     startup: bool = False
     success: bool = True
-    no_changes: bool = False
+    no_changes: bool = True
     failure: bool = True
     auth_required: bool = True
+    notification_days: Annotated[int, Field(ge=1, le=30)] = 7
     channels: list[NotificationChannelConfig] = Field(default_factory=list)
 
 

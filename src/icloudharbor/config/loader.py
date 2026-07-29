@@ -88,6 +88,7 @@ NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_NOTIFY_NO_CHANGES", ("no_changes",), _parse_bool),
     ("IH_NOTIFY_FAILURE", ("failure",), _parse_bool),
     ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
+    ("notification_days", ("notification_days",), _parse_int),
 )
 
 WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
@@ -200,6 +201,11 @@ def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
         "server": _environment_value("IH_WECOM_PROXY"),
         "content_source_url": _environment_value("IH_WECOM_CONTENT_SOURCE_URL"),
         "name": _environment_value("IH_WECOM_NAME"),
+        "media_id_download": _environment_value("media_id_download"),
+        "media_id_startup": _environment_value("media_id_startup"),
+        "media_id_warning": _environment_value("media_id_warning"),
+        "media_id_expiration": _environment_value("media_id_expiration"),
+        "media_id_delete": _environment_value("media_id_delete"),
     }
     if not any(values.values()):
         return
@@ -222,7 +228,16 @@ def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
         "agent_id": _parse_int(values["agent_id"] or ""),
         "to_user": values["to_user"],
     }
-    for key in ("server", "content_source_url", "name"):
+    for key in (
+        "server",
+        "content_source_url",
+        "name",
+        "media_id_download",
+        "media_id_startup",
+        "media_id_warning",
+        "media_id_expiration",
+        "media_id_delete",
+    ):
         if values[key] is not None:
             channel[key] = values[key]
 

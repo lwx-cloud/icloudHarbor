@@ -126,6 +126,11 @@ docker compose exec icloudharbor icloudharbor setup
 | `IH_LOG_LEVEL` | 否 | `INFO` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | 日志等级。 |
 | `IH_LOG_FORMAT` | 否 | `text` | `text`、`json` | NAS 控制台建议使用 `text`，日志平台建议使用 `json`。 |
 
+`IH_LOG_LEVEL=INFO` 时，`docker logs -f icloudharbor` 会按文件显示下载开始、断点续传、
+完成、重试和失败，路径均为照片卷内的相对路径。计划日志提供下载数、跳过数和预计数据量；
+`delete_disabled` 明确表示不会删除 iCloud 或本地照片。第三方 HTTP 请求的 INFO 日志默认
+关闭，标准日志和结构化日志都会对账号、请求头、企业微信密钥及访问令牌进行脱敏。
+
 ### 4.3 Apple Account 与目标目录
 
 | 参数 | 必填 | 默认值 | 可选值/格式 | 说明 |
@@ -217,9 +222,10 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | --- | --- | --- | --- |
 | `IH_NOTIFY_STARTUP` | 否 | `false` | 容器启动时通知。 |
 | `IH_NOTIFY_SUCCESS` | 否 | `true` | 有变化且同步成功时通知。 |
-| `IH_NOTIFY_NO_CHANGES` | 否 | `false` | 没有变化的成功同步也通知。 |
+| `IH_NOTIFY_NO_CHANGES` | 否 | `true` | 没有变化的成功同步也通知；因此每次同步任务结束都有结果消息。 |
 | `IH_NOTIFY_FAILURE` | 否 | `true` | 失败、部分失败、存储不足等事件通知。 |
-| `IH_NOTIFY_AUTH_REQUIRED` | 否 | `true` | Apple 要求重新认证时通知。 |
+| `IH_NOTIFY_AUTH_REQUIRED` | 否 | `true` | Apple 认证临期或要求重新认证时通知。 |
+| `notification_days` | 否 | `7` | 受信任认证到期前多少天开始提醒，范围 `1`–`30`；每天最多一次。 |
 
 企业微信可直接使用下一节的 `IH_WECOM_*` 参数。Bark、Server酱、Telegram 和 Webhook
 仍通过 `config.yaml` 配置，敏感值放在独立密钥文件中。
@@ -237,6 +243,11 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | `IH_WECOM_PROXY` | 否 | 官方 API | `wecom_proxy` | 企业微信代理 API 根地址。 |
 | `IH_WECOM_CONTENT_SOURCE_URL` | 否 | 无 | `content_source_url` | 配置后发送带“查看详情”的文本卡片。 |
 | `IH_WECOM_NAME` | 否 | 无 | `name` | 消息正文顶部显示的名称。 |
+| `MEDIA_ID_DOWNLOAD` | 否 | 无 | `media_id_download` | 下载成功通知的企业微信素材 ID。 |
+| `MEDIA_ID_STARTUP` | 否 | 无 | `media_id_startup` | 启动通知的企业微信素材 ID。 |
+| `MEDIA_ID_WARNING` | 否 | 无 | `media_id_warning` | 同步失败或认证失效通知的企业微信素材 ID。 |
+| `MEDIA_ID_EXPIRATION` | 否 | 无 | `media_id_expiration` | 认证临期通知的企业微信素材 ID。 |
+| `MEDIA_ID_DELETE` | 否 | 无 | `media_id_delete` | 保留与 icloudpd 相同的配置名；本项目不执行删除，因此不会触发。 |
 
 ```dotenv
 IH_WECOM_ID=ww0000000000000000
@@ -246,7 +257,16 @@ IH_WECOM_TO_USER=@all
 IH_WECOM_PROXY=https://qyapi.weixin.qq.com
 IH_WECOM_CONTENT_SOURCE_URL=https://example.com
 IH_WECOM_NAME=iCloudHarbor
+MEDIA_ID_DOWNLOAD=your-download-media-id
+MEDIA_ID_STARTUP=your-startup-media-id
+MEDIA_ID_WARNING=your-warning-media-id
+MEDIA_ID_EXPIRATION=your-expiration-media-id
+MEDIA_ID_DELETE=your-delete-media-id
 ```
+
+Compose 会把上述五项分别传入同名的 `media_id_download`、`media_id_startup`、
+`media_id_warning`、`media_id_expiration` 和 `media_id_delete` 容器参数。有对应素材 ID 时
+发送企业微信图文消息；未填写时继续发送文本或文本卡片。
 
 ## 5. `config.yaml` 完整示例
 
@@ -322,9 +342,10 @@ accounts:
 notifications:
   startup: false
   success: true
-  no_changes: false
+  no_changes: true
   failure: true
   auth_required: true
+  notification_days: 7
   channels: []
 
 security:
@@ -402,9 +423,10 @@ security:
 | --- | --- | --- | --- |
 | `notifications.startup` | 否 | `false` | 启动通知。 |
 | `notifications.success` | 否 | `true` | 同步成功通知。 |
-| `notifications.no_changes` | 否 | `false` | 无变化通知。 |
+| `notifications.no_changes` | 否 | `true` | 无变化也通知，保证每次同步任务结束都有结果消息。 |
 | `notifications.failure` | 否 | `true` | 失败和告警通知。 |
-| `notifications.auth_required` | 否 | `true` | 需要重新认证时通知。 |
+| `notifications.auth_required` | 否 | `true` | 认证临期和需要重新认证时通知。 |
+| `notifications.notification_days` | 否 | `7` | 到期前提醒天数，范围 `1`–`30`；每天最多一次。 |
 | `notifications.channels` | 否 | `[]` | 通知通道列表；为空表示完全关闭通知。 |
 
 ### 6.5 通知通道通用参数
@@ -439,6 +461,11 @@ Docker 部署推荐使用 `IH_WECOM_*` 参数；启动脚本会自动创建 Secr
 | `channels[].server` | 否 | `https://qyapi.weixin.qq.com` | `wecom_proxy` | 代理时填写完整 API 根地址。 |
 | `channels[].content_source_url` | 否 | 无 | `content_source_url` | 配置后发送带“查看详情”的文本卡片。 |
 | `channels[].name` | 否 | 无 | `name` | 消息正文顶部显示的账号所有人或设备名称。 |
+| `channels[].media_id_download` | 否 | 无 | `media_id_download` | 下载成功封面素材 ID。 |
+| `channels[].media_id_startup` | 否 | 无 | `media_id_startup` | 启动成功封面素材 ID。 |
+| `channels[].media_id_warning` | 否 | 无 | `media_id_warning` | 同步失败或认证失效封面素材 ID。 |
+| `channels[].media_id_expiration` | 否 | 无 | `media_id_expiration` | 认证即将到期封面素材 ID。 |
+| `channels[].media_id_delete` | 否 | 无 | `media_id_delete` | 兼容字段；备份模式不会触发删除通知。 |
 
 创建 Secret 文件：
 
@@ -465,9 +492,10 @@ chmod 600 ./data/config/notification-keys/wecom-secret
 notifications:
   startup: false
   success: true
-  no_changes: false
+  no_changes: true
   failure: true
   auth_required: true
+  notification_days: 7
   channels:
     - type: wecom
       enabled: true
@@ -476,6 +504,11 @@ notifications:
       agent_id: 1000002
       to_user: "@all"
       name: 家庭 iCloud
+      media_id_download: your-download-media-id
+      media_id_startup: your-startup-media-id
+      media_id_warning: your-warning-media-id
+      media_id_expiration: your-expiration-media-id
+      media_id_delete: your-delete-media-id
       # server: https://your-wecom-proxy.example.com
       # content_source_url: https://your-status-page.example.com
       timeout: 10
@@ -655,6 +688,11 @@ IH_PHOTOS_PATH/personal
 非空 `IH_*` 会在每次启动时覆盖 YAML。删除某个环境变量后，之前生成在 `config.yaml` 中的值
 仍会保留，需要同时修改 YAML。
 
+### 容器异常停止后提示数据库锁被占用
+
+从 `0.1.4` 开始不需要手工修改数据库。下一次同步取得独占文件锁后，会自动清理同一账号和
+图库由异常终止留下的 SQLite 租约。仍然存活的同步进程持有文件锁，不会被错误清理。
+
 ### 没有收到通知
 
 依次检查：
@@ -688,5 +726,7 @@ docker compose exec icloudharbor icloudharbor setup
 - 下载只从 iCloud 写入本地，不会删除 iCloud 内容，也不会把本地删除同步到远端。
 - 只有一次同步的全部资源成功时才会提交新游标。
 - 下载先写同目录 `.part` 文件，校验后原子替换正式文件。
+- 容器异常终止留下的数据库租约会在下一次取得独占文件锁后自动恢复；真实运行中的同步
+  仍会被进程锁和文件锁阻止重复启动。
 
 更新或迁移前，至少备份整个 `IH_CONFIG_PATH`。

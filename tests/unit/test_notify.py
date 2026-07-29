@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from icloudharbor.config.models import NotificationChannelConfig
 from icloudharbor.notify.base import NotificationEvent, NotificationType, NotifierHub
@@ -76,6 +77,55 @@ def test_wecom_uses_textcard_when_source_url_is_configured(tmp_path: Path) -> No
         response = NotifierHub._wecom(client, channel, event)
 
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("event_type", "field_name"),
+    [
+        (NotificationType.SYNC_COMPLETED, "media_id_download"),
+        (NotificationType.APP_STARTED, "media_id_startup"),
+        (NotificationType.SYNC_FAILED, "media_id_warning"),
+        (NotificationType.AUTH_EXPIRING, "media_id_expiration"),
+        (NotificationType.DELETE_GUARD_TRIGGERED, "media_id_delete"),
+    ],
+)
+def test_wecom_uses_matching_media_id_for_mpnews(
+    tmp_path: Path,
+    event_type: NotificationType,
+    field_name: str,
+) -> None:
+    secret_file = tmp_path / "wecom-secret"
+    secret_file.write_text("test-secret", encoding="utf-8")
+    sent_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(200, json={"errcode": 0, "access_token": "access-token"})
+        sent_payload.update(json.loads(request.content))
+        return httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+
+    channel = NotificationChannelConfig.model_validate(
+        {
+            "type": "wecom",
+            "corp_id": "corp-id",
+            "corp_secret_file": secret_file,
+            "agent_id": 1000002,
+            "to_user": "@all",
+            "content_source_url": "https://example.com/status",
+            field_name: "event-media-id",
+        }
+    )
+    event = NotificationEvent(event_type, "状态通知", "下载完成\n共 3 个文件")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        response = NotifierHub._wecom(client, channel, event)
+
+    assert response.status_code == 200
+    assert sent_payload["msgtype"] == "mpnews"
+    articles = sent_payload["mpnews"]["articles"]  # type: ignore[index]
+    assert articles[0]["thumb_media_id"] == "event-media-id"
+    assert articles[0]["content_source_url"] == "https://example.com/status"
+    assert articles[0]["content"] == "状态通知<br><br>下载完成<br>共 3 个文件"
 
 
 def test_wecom_api_error_is_reported_without_secret(tmp_path: Path) -> None:

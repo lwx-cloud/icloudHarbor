@@ -182,3 +182,10 @@ class NotificationDeliveryRow(Base):
     status_code: Mapped[int | None] = mapped_column(Integer)
     duration_seconds: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NotificationStateRow(Base):
+    __tablename__ = "notification_states"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

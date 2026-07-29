@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -219,6 +219,20 @@ def test_adapter_lists_albums_and_streams_signed_resource(tmp_path: Path) -> Non
     assert body == b"data"
     assert stream.supports_range is True
     assert adapter._api.session.last_kwargs["timeout"] == 42
+
+
+def test_adapter_reads_trusted_session_cookie_expiration(tmp_path: Path) -> None:
+    adapter = PyicloudProtocolAdapter(tmp_path / "sessions", "personal")
+    adapter._api = DummyApi()
+    expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(days=6)
+    adapter._api.session.cookies = [
+        SimpleNamespace(
+            name="X-APPLE-WEBAUTH-USER",
+            expires=int(expires_at.timestamp()),
+        )
+    ]
+
+    assert adapter.session_expires_at() == expires_at
 
 
 def test_adapter_lists_libraries_and_album_assets_with_limit(tmp_path: Path) -> None:

@@ -1,6 +1,9 @@
 .git
 .github
 .venv
+.uv-cache
+dist
+.codex*
 .env
 .env.*
 !.env.example

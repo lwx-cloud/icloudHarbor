@@ -22,6 +22,7 @@ from icloudharbor.database.models import (
     LibraryRow,
     LocalFileRow,
     LockRow,
+    NotificationStateRow,
     ResourceRow,
     SyncEventRow,
     SyncRunRow,
@@ -410,6 +411,24 @@ class StateRepository:
     def release_lock(self, name: str, owner: str) -> None:
         with self.database.sessions.begin() as session:
             session.execute(delete(LockRow).where(LockRow.name == name, LockRow.owner == owner))
+
+    def clear_lock(self, name: str) -> int:
+        with self.database.sessions.begin() as session:
+            result = session.execute(delete(LockRow).where(LockRow.name == name))
+            return int(result.rowcount or 0)
+
+    def claim_notification(self, key: str) -> bool:
+        try:
+            with self.database.sessions.begin() as session:
+                session.add(NotificationStateRow(key=key))
+                session.flush()
+        except IntegrityError:
+            return False
+        return True
+
+    def release_notification_claim(self, key: str) -> None:
+        with self.database.sessions.begin() as session:
+            session.execute(delete(NotificationStateRow).where(NotificationStateRow.key == key))
 
     def backup(self, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -22,7 +22,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.1.3`，支持：
+当前版本为 `0.1.4`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`。
@@ -32,9 +32,14 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `icloudharbor setup` 以星号遮罩读取密码、完成认证、保存本地续期凭据并立即首次同步。
 - `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码。
 - Cron 或固定间隔调度、启动时同步、增量游标与定期全量扫描。
+- 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版选择。
 - 日期、收藏、隐藏项目筛选。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
+- 企业微信兼容 icloudpd 的五个媒体 ID，并按真实 Cookie 到期时间提前 7 天每日提醒一次。
+- 每次同步任务结束都发送结果通知，包括首次、手动、调度以及没有新文件的成功同步；通知
+  没有独立定时器，认证临期只在同步时检查并单独按天去重。
+- 容器 INFO 日志按文件显示下载、断点续传、重试、完成和失败，并抑制第三方 HTTP 请求日志。
 - amd64 与 arm64 Docker 构建。
 
 明确未支持：
@@ -113,9 +118,9 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `database/repository.py`：账号、图库、资源、运行记录、游标和锁的数据访问。
 - `database/session.py`：SQLite 连接、WAL、外键和完整性检查。
 - `scheduler/service.py`：Cron/间隔任务与启动时任务。
-- `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥。
+- `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥，以及崩溃残留租约恢复。
 - `notify/base.py`：通知事件路由和五种通知通道。
-- `observability/logging.py`：文本/JSON 结构化日志。
+- `observability/logging.py`：文本/JSON 结构化日志、第三方日志降噪和标准日志脱敏。
 - `observability/health.py`：存活与就绪检查。
 
 ## 5. 持久化数据
@@ -190,7 +195,7 @@ docker build .
 - 已在 Synology Docker 环境完成真实 Apple Account 双重认证和个人图库下载闭环。
 - 已验证中国大陆服务区域、星号密码输入、Session 续期、配置自动生成和下载目录保护。
 - 已验证真实日期范围样本能完成照片资源下载。
-- 2026-07-29 发布检查：76 项自动化测试全部通过，代码覆盖率 80%。
+- 2026-07-29 发布检查：87 项自动化测试全部通过，代码覆盖率 80%。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。

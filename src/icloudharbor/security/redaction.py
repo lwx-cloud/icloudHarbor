@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 
 _EMAIL_RE = re.compile(r"\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@[^@\s]+)\b")
-_QUERY_SECRET_RE = re.compile(r"(?i)([?&](?:token|signature|sig|auth|x-apple-[^=]+)=)[^&\s]+")
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:access[_-]?token|corpsecret|token|signature|sig|auth|x-apple-[^=]+)=)"
+    r"[^&\s]+"
+)
 _HEADER_RE = re.compile(
     r"(?i)\b(authorization|cookie|x-apple-session-token|password|verification_code)"
     r"\s*[:=]\s*([^\s,;]+)"

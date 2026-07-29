@@ -6,6 +6,7 @@ import json
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from html import escape
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ class NotificationType(StrEnum):
     SYNC_PARTIAL = "SYNC_PARTIAL"
     SYNC_FAILED = "SYNC_FAILED"
     AUTH_REQUIRED = "AUTH_REQUIRED"
+    AUTH_EXPIRING = "AUTH_EXPIRING"
     AUTH_RECOVERED = "AUTH_RECOVERED"
     MOUNT_MISSING = "MOUNT_MISSING"
     STORAGE_LOW = "STORAGE_LOW"
@@ -65,6 +67,8 @@ class NotifierHub:
         if event.type == NotificationType.SYNC_COMPLETED:
             return self.config.success
         if event.type == NotificationType.AUTH_REQUIRED:
+            return self.config.auth_required
+        if event.type == NotificationType.AUTH_EXPIRING:
             return self.config.auth_required
         return self.config.failure
 
@@ -174,7 +178,20 @@ class NotifierHub:
             "enable_duplicate_check": 1,
             "duplicate_check_interval": 1800,
         }
-        if channel.content_source_url:
+        media_id = NotifierHub._wecom_media_id(channel, event.type)
+        if media_id:
+            article: dict[str, object] = {
+                "title": event.title,
+                "thumb_media_id": media_id,
+                "content": escape(content).replace("\n", "<br>"),
+                "digest": event.message,
+            }
+            if channel.name:
+                article["author"] = channel.name
+            if channel.content_source_url:
+                article["content_source_url"] = str(channel.content_source_url)
+            message.update({"msgtype": "mpnews", "mpnews": {"articles": [article]}})
+        elif channel.content_source_url:
             message.update(
                 {
                     "msgtype": "textcard",
@@ -199,6 +216,21 @@ class NotifierHub:
         if result.get("errcode", 0) != 0:
             raise ValueError("企业微信消息发送失败")
         return response
+
+    @staticmethod
+    def _wecom_media_id(
+        channel: NotificationChannelConfig,
+        event_type: NotificationType,
+    ) -> str | None:
+        if event_type == NotificationType.APP_STARTED:
+            return channel.media_id_startup
+        if event_type == NotificationType.SYNC_COMPLETED:
+            return channel.media_id_download
+        if event_type == NotificationType.AUTH_EXPIRING:
+            return channel.media_id_expiration
+        if event_type == NotificationType.DELETE_GUARD_TRIGGERED:
+            return channel.media_id_delete
+        return channel.media_id_warning
 
     @staticmethod
     def _webhook(

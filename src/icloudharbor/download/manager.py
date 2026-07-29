@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+import structlog
+
 from icloudharbor.config.models import AccountConfig
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.download.retry import retry_delay
@@ -14,6 +16,8 @@ from icloudharbor.download.verifier import verify_file
 from icloudharbor.photos.planner import DownloadTask, SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError, ProtocolError
+
+LOGGER = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -59,9 +63,19 @@ class DownloadManager:
                 try:
                     outcomes.append(future.result())
                 except Exception as exc:  # defensive containment for worker failures
+                    task = futures[future]
+                    LOGGER.error(
+                        "download_failed",
+                        account_id=self.account.id,
+                        asset_id=task.asset.asset_id,
+                        resource_id=task.resource.resource_id,
+                        file=task.relative_path.as_posix(),
+                        error_code=ErrorCode.UNKNOWN_PROTOCOL_ERROR.value,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                     outcomes.append(
                         DownloadOutcome(
-                            futures[future],
+                            task,
                             False,
                             error_code=ErrorCode.UNKNOWN_PROTOCOL_ERROR.value,
                             message=f"{type(exc).__name__}: {exc}",
@@ -77,16 +91,54 @@ class DownloadManager:
     def _download_with_retry(self, task: DownloadTask) -> DownloadOutcome:
         last_error: Exception | None = None
         for attempt in range(self.account.download.max_retries + 1):
+            LOGGER.info(
+                "download_started",
+                account_id=self.account.id,
+                asset_id=task.asset.asset_id,
+                resource_id=task.resource.resource_id,
+                file=task.relative_path.as_posix(),
+                expected_bytes=task.resource.size,
+                attempt=attempt + 1,
+                repair=task.repair,
+            )
             try:
                 size = self._download_once(task)
+                LOGGER.info(
+                    "download_completed",
+                    account_id=self.account.id,
+                    asset_id=task.asset.asset_id,
+                    resource_id=task.resource.resource_id,
+                    file=task.relative_path.as_posix(),
+                    bytes_downloaded=size,
+                )
                 return DownloadOutcome(task, True, bytes_downloaded=size)
             except (HarborError, ProtocolError, OSError) as exc:
                 last_error = exc
                 if attempt >= self.account.download.max_retries or not self._retryable(exc):
                     break
-                time.sleep(retry_delay(attempt))
+                delay = retry_delay(attempt)
+                LOGGER.warning(
+                    "download_retry",
+                    account_id=self.account.id,
+                    asset_id=task.asset.asset_id,
+                    resource_id=task.resource.resource_id,
+                    file=task.relative_path.as_posix(),
+                    attempt=attempt + 1,
+                    retry_in_seconds=round(delay, 2),
+                    error=str(exc),
+                )
+                time.sleep(delay)
         code = getattr(last_error, "code", ErrorCode.UNKNOWN_PROTOCOL_ERROR)
         code_value = code.value if isinstance(code, ErrorCode) else str(code)
+        LOGGER.error(
+            "download_failed",
+            account_id=self.account.id,
+            asset_id=task.asset.asset_id,
+            resource_id=task.resource.resource_id,
+            file=task.relative_path.as_posix(),
+            error_code=code_value,
+            error=str(last_error) if last_error else "未知下载错误",
+        )
         return DownloadOutcome(
             task,
             False,
@@ -112,6 +164,15 @@ class DownloadManager:
             partial.unlink(missing_ok=True)
             offset = 0
             stream = self.protocol.open_resource(task.resource, offset=0)
+        if offset:
+            LOGGER.info(
+                "download_resumed",
+                account_id=self.account.id,
+                asset_id=task.asset.asset_id,
+                resource_id=task.resource.resource_id,
+                file=task.relative_path.as_posix(),
+                offset_bytes=offset,
+            )
 
         mode = "ab" if offset else "wb"
         try:

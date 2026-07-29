@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from icloudharbor.protocol.models import (
     AssetQuery,
@@ -32,6 +33,9 @@ class ICloudProtocol(ABC):
 
     @abstractmethod
     def auth_status(self) -> AuthStatus: ...
+
+    @abstractmethod
+    def session_expires_at(self) -> datetime | None: ...
 
     @abstractmethod
     def list_libraries(self) -> list[RemoteLibrary]: ...

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
+from structlog.testing import capture_logs
 from tests.conftest import FakeProtocol, make_asset
 
 from icloudharbor.application import HarborApplication
 from icloudharbor.config.models import AppConfig
+from icloudharbor.notify.base import DeliveryResult, NotificationType
 from icloudharbor.protocol.models import RemoteResource
 
 
@@ -16,8 +20,9 @@ def test_first_run_downloads_and_second_run_is_idempotent(
     application = HarborApplication(app_config, protocol_factory=lambda _: fake)
     account = app_config.accounts[0]
 
-    first = application.run_sync(account)
-    second = application.run_sync(account, force_full_scan=True)
+    with capture_logs() as logs:
+        first = application.run_sync(account)
+        second = application.run_sync(account, force_full_scan=True)
 
     target = account.destination.path / "2026/07/29/IMG_0001.JPG"
     assert first.status == "COMPLETED"
@@ -26,6 +31,34 @@ def test_first_run_downloads_and_second_run_is_idempotent(
     assert second.downloaded_count == 0
     assert second.skipped_count == 1
     assert fake.calls.count("open_resource:resource-1") == 1
+    events = [entry["event"] for entry in logs]
+    assert "download_started" in events
+    assert "download_completed" in events
+    assert "delete_disabled" in events
+    assert next(entry for entry in logs if entry["event"] == "download_started")["file"] == (
+        "2026/07/29/IMG_0001.JPG"
+    )
+
+
+def test_auth_expiration_notification_is_sent_at_most_once_per_day(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeProtocol(session_expires_at=datetime.now(UTC) + timedelta(days=2))
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+    events: list[NotificationType] = []
+
+    def send(event: object) -> list[DeliveryResult]:
+        events.append(event.type)  # type: ignore[attr-defined]
+        return [DeliveryResult("wecom", True, 200)]
+
+    monkeypatch.setattr(application.notifier, "send", send)
+
+    application.run_sync(app_config.accounts[0])
+    application.run_sync(app_config.accounts[0], force_full_scan=True)
+
+    assert events.count(NotificationType.AUTH_EXPIRING) == 1
+    assert events.count(NotificationType.SYNC_COMPLETED) == 2
 
 
 def test_dry_run_does_not_create_formal_or_partial_file(
@@ -89,11 +122,15 @@ def test_partial_file_resumes_with_range(app_config: AppConfig) -> None:
     partial.parent.mkdir(parents=True)
     partial.write_bytes(data[:4])
 
-    result = application.run_sync(account)
+    with capture_logs() as logs:
+        result = application.run_sync(account)
 
     assert result.status == "COMPLETED"
     assert fake.offsets == [4]
     assert partial.with_suffix("").read_bytes() == data
+    assert (
+        next(entry for entry in logs if entry["event"] == "download_resumed")["offset_bytes"] == 4
+    )
 
 
 def test_same_remote_filename_does_not_overwrite(app_config: AppConfig) -> None:

@@ -9,10 +9,13 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
+import structlog
 from filelock import FileLock, Timeout
 
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError
+
+LOGGER = structlog.get_logger(__name__)
 
 
 class LockCoordinator:
@@ -39,6 +42,17 @@ class LockCoordinator:
             except Timeout as exc:
                 raise HarborError("同步文件锁已被占用", ErrorCode.ALREADY_RUNNING) from exc
             db_acquired = self.repository.acquire_lock(name, owner, ttl)
+            if not db_acquired:
+                # The exclusive OS file lock proves that no live local worker owns
+                # this name. Recover the SQLite lease left by an interrupted
+                # container instead of blocking until its long TTL expires.
+                cleared = self.repository.clear_lock(name)
+                LOGGER.warning(
+                    "stale_database_lock_recovered",
+                    lock_name=name,
+                    cleared=cleared,
+                )
+                db_acquired = self.repository.acquire_lock(name, owner, ttl)
             if not db_acquired:
                 raise HarborError("同步数据库锁已被占用", ErrorCode.ALREADY_RUNNING)
             yield

@@ -150,6 +150,12 @@ def test_environment_override_builds_wecom_channel_without_persisting_secret(
     monkeypatch.setenv("IH_WECOM_TO_USER", "@all")
     monkeypatch.setenv("IH_WECOM_PROXY", "https://qyapi.weixin.qq.com")
     monkeypatch.setenv("IH_WECOM_NAME", "iCloudHarbor")
+    monkeypatch.setenv("media_id_download", "download-media")
+    monkeypatch.setenv("media_id_startup", "startup-media")
+    monkeypatch.setenv("media_id_warning", "warning-media")
+    monkeypatch.setenv("media_id_expiration", "expiration-media")
+    monkeypatch.setenv("media_id_delete", "delete-media")
+    monkeypatch.setenv("notification_days", "5")
 
     config = load_config(path)
 
@@ -159,6 +165,12 @@ def test_environment_override_builds_wecom_channel_without_persisting_secret(
     assert channel.agent_id == 1000001
     assert channel.to_user == "@all"
     assert channel.corp_secret_file == Path("/config/notification-keys/wecom-secret")
+    assert channel.media_id_download == "download-media"
+    assert channel.media_id_startup == "startup-media"
+    assert channel.media_id_warning == "warning-media"
+    assert channel.media_id_expiration == "expiration-media"
+    assert channel.media_id_delete == "delete-media"
+    assert config.notifications.notification_days == 5
     assert "must-not-enter-config" not in config_snapshot(config)
 
 

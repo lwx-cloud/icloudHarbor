@@ -10,10 +10,17 @@ from icloudharbor.security.redaction import redact
 
 
 def test_redacts_account_headers_and_signed_query() -> None:
-    value = "user@example.com Authorization:BearerSecret https://example.test/a?token=abc&x=1"
+    value = (
+        "user@example.com Authorization:BearerSecret "
+        "https://example.test/a?token=abc&corpsecret=secret&access_token=access&x=1"
+    )
     result = redact(value)
     assert "BearerSecret" not in result
     assert "token=abc" not in result
+    assert "corpsecret=secret" not in result
+    assert "access_token=access" not in result
+    assert "corpsecret=[REDACTED]" in result
+    assert "access_token=[REDACTED]" in result
     assert "user@example.com" not in result
     assert "u***@example.com" in result
 

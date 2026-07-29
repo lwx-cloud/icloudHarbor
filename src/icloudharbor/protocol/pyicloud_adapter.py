@@ -138,6 +138,26 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             return AuthStatus.SECURITY_KEY_REQUIRED
         return AuthStatus.AUTHENTICATED
 
+    def session_expires_at(self) -> datetime | None:
+        if not self._api:
+            return None
+        session = getattr(self._api, "session", None)
+        cookies = list(getattr(session, "cookies", []))
+        for name in (
+            "X-APPLE-WEBAUTH-USER",
+            "X-APPLE-WEBAUTH-HSA-TRUST",
+            "X-APPLE-WEBAUTH-TOKEN",
+        ):
+            expirations = [
+                datetime.fromtimestamp(cookie.expires, UTC)
+                for cookie in cookies
+                if getattr(cookie, "name", None) == name
+                and isinstance(getattr(cookie, "expires", None), int | float)
+            ]
+            if expirations:
+                return min(expirations)
+        return None
+
     def list_libraries(self) -> list[RemoteLibrary]:
         self._require_authenticated()
         return [RemoteLibrary("root", "个人图库", "personal")]

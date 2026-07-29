@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import structlog
 
 from icloudharbor.auth.manager import AuthManager
 from icloudharbor.auth.session_store import SessionStore
@@ -23,6 +28,7 @@ from icloudharbor.scheduler.locks import LockCoordinator
 from icloudharbor.security.credentials import CredentialStore
 
 ProtocolFactory = Callable[[AccountConfig], ICloudProtocol]
+LOGGER = structlog.get_logger(__name__)
 
 
 class HarborApplication:
@@ -102,6 +108,14 @@ class HarborApplication:
                 self.ensure_session(account)
                 # The engine records a stable AUTH_REQUIRED result and keeps
                 # long-running containers alive.
+        try:
+            self._notify_auth_expiration(account)
+        except Exception as exc:
+            LOGGER.warning(
+                "auth_expiration_check_failed",
+                account_id=account.id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         result = PhotosEngine(
             self.protocol(account),
             self.repository,
@@ -110,6 +124,50 @@ class HarborApplication:
         ).run(account, dry_run=dry_run, force_full_scan=force_full_scan)
         self._notify_sync(account, result)
         return result
+
+    def _notify_auth_expiration(self, account: AccountConfig) -> None:
+        protocol = self.protocol(account)
+        if protocol.auth_status() != AuthStatus.AUTHENTICATED:
+            return
+        expires_at = protocol.session_expires_at()
+        if expires_at is None:
+            return
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        remaining = expires_at - datetime.now(UTC)
+        notification_window = timedelta(days=self.config.notifications.notification_days)
+        if remaining <= timedelta(0) or remaining > notification_window:
+            return
+
+        days_remaining = max(1, math.ceil(remaining.total_seconds() / 86400))
+        local_day = datetime.now(ZoneInfo(self.config.runtime.timezone)).date().isoformat()
+        claim = f"auth-expiring:{account.id}:{local_day}"
+        if not self.repository.claim_notification(claim):
+            return
+
+        results = self.notifier.send(
+            NotificationEvent(
+                NotificationType.AUTH_EXPIRING,
+                "iCloudHarbor 认证即将到期",
+                (
+                    f"账号：{account.name}\n"
+                    f"认证将在 {days_remaining} 天内到期，请运行 session renew。"
+                ),
+                {
+                    "account_id": account.id,
+                    "days_remaining": days_remaining,
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+        )
+        if not any(result.success for result in results):
+            self.repository.release_notification_claim(claim)
+            return
+        LOGGER.warning(
+            "auth_expiration_warning_sent",
+            account_id=account.id,
+            days_remaining=days_remaining,
+        )
 
     def _default_protocol(self, account: AccountConfig) -> ICloudProtocol:
         return PyicloudProtocolAdapter(

@@ -11,6 +11,13 @@ from icloudharbor.config.models import RuntimeConfig
 from icloudharbor.security.redaction import redact
 
 
+class _RedactingLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact(record.getMessage())
+        record.args = ()
+        return True
+
+
 def _redact_event(_: Any, __: str, event_dict: MutableMapping[str, Any]) -> Mapping[str, Any]:
     for key, value in list(event_dict.items()):
         if isinstance(value, str):
@@ -25,6 +32,11 @@ def configure_logging(config: RuntimeConfig) -> None:
         format="%(message)s",
         force=True,
     )
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_RedactingLogFilter())
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
     renderer: object
     if config.log_format == "json":
         renderer = structlog.processors.JSONRenderer(ensure_ascii=False)

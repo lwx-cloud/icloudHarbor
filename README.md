@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.1.3`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 当前版本为 `0.1.4`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
 > 请保留其他可靠备份。
 
 ## 功能
@@ -193,6 +193,10 @@ Session 过期时：
 docker exec -it icloudharbor icloudharbor session renew
 ```
 
+启用通知通道后，程序会读取 Apple 受信任 Session Cookie 的真实到期时间，默认从到期前
+7 天开始每天最多提醒一次。企业微信可使用与 icloudpd 相同的五个 `MEDIA_ID_*` 配置显示
+下载、启动、警告、认证临期和删除状态封面；本项目不会执行删除，因此删除封面不会触发。
+
 该命令读取 `setup` 保存的本地凭据；Apple 要求双重认证时，只需再输入验证码。如果 Apple
 密码已经修改、凭据不存在或无法解密，请重新运行：
 
@@ -237,7 +241,15 @@ docker exec icloudharbor icloudharbor database backup
 
 # 容器日志
 docker compose logs --tail=200 icloudharbor
+
+# 持续查看当前正在处理的照片
+docker logs -f icloudharbor
 ```
+
+`INFO` 日志会按文件显示 `download_started`、`download_resumed`、`download_completed`、
+`download_retry` 和 `download_failed`。文件使用照片卷内的相对路径，不输出签名下载链接。
+`delete_disabled` 表示当前为单向备份模式：程序不会删除 iCloud 或本地照片。同步计划中的
+已存在文件只显示跳过总数，避免全量扫描时产生海量日志。
 
 所有 Docker 参数、取值、默认值、YAML 高级配置和完整命令说明见
 [`CONFIGURATION.md`](CONFIGURATION.md)。
@@ -299,6 +311,12 @@ docker exec -it icloudharbor icloudharbor setup
 
 网络、限流和过期下载地址会自动重试。修复原因后再次运行 `sync run`；已经校验完成的资源会
 跳过，可续传的 `.part` 文件会继续使用。
+
+### 容器异常停止后提示数据库锁被占用
+
+`0.1.4` 起不需要手工删除 SQLite 锁。新同步会先取得持久化目录中的独占文件锁；确认没有
+仍在运行的同步进程后，只清除同一账号和图库的残留数据库租约并立即继续。若仍看到
+`sync_skipped_already_running`，说明确实有另一个同步任务正在运行。
 
 ## 安全说明
 

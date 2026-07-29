@@ -41,12 +41,14 @@ class FakeProtocol(ICloudProtocol):
         status: AuthStatus = AuthStatus.AUTHENTICATED,
         cursor: str | None = None,
         require_two_factor_on_authenticate: bool = False,
+        session_expires_at: datetime | None = None,
     ) -> None:
         self.assets = assets or []
         self.content = content or {}
         self.status = status
         self.cursor = cursor
         self.require_two_factor_on_authenticate = require_two_factor_on_authenticate
+        self._session_expires_at = session_expires_at
         self.calls: list[str] = []
         self.offsets: list[int] = []
         self.challenge_id = "fake-challenge"
@@ -71,6 +73,9 @@ class FakeProtocol(ICloudProtocol):
 
     def auth_status(self) -> AuthStatus:
         return self.status
+
+    def session_expires_at(self) -> datetime | None:
+        return self._session_expires_at
 
     def list_libraries(self) -> list[RemoteLibrary]:
         self.calls.append("list_libraries")

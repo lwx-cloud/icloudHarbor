@@ -234,6 +234,9 @@ def setup(
 
     typer.echo("5/5 设置完成，开始首次正式同步")
     sync_result = instance.run_sync(account, authenticate=False)
+    if sync_result.status == "SKIPPED_ALREADY_RUNNING":
+        typer.echo("  首次正式同步已在后台运行，本次不重复启动。")
+        return
     typer.echo(
         f"  状态：{sync_result.status}；下载={sync_result.downloaded_count}；"
         f"跳过={sync_result.skipped_count}；失败={sync_result.failed_count}；"

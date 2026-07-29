@@ -132,6 +132,12 @@ class PhotosEngine:
                         "estimated_bytes": plan.estimated_bytes,
                     },
                 )
+                LOGGER.info(
+                    "delete_disabled",
+                    run_id=run_id,
+                    account_id=account.id,
+                    message="备份模式：不会删除 iCloud 或本地照片",
+                )
                 self._check_plan_space(account, plan)
 
                 if dry_run:
@@ -191,22 +197,30 @@ class PhotosEngine:
         except Exception as exc:
             code = getattr(exc, "code", ErrorCode.UNKNOWN_PROTOCOL_ERROR)
             code_value = code.value if isinstance(code, ErrorCode) else str(code)
-            status = "SKIPPED_ALREADY_RUNNING" if code == ErrorCode.ALREADY_RUNNING else "FAILED"
+            already_running = code == ErrorCode.ALREADY_RUNNING
+            status = "SKIPPED_ALREADY_RUNNING" if already_running else "FAILED"
             self.repository.finish_run(run_id, status=status, error_code=code_value)
             self._event(
                 run_id,
                 status,
                 str(exc),
-                severity="ERROR",
+                severity="INFO" if already_running else "ERROR",
                 payload={"error_code": code_value},
             )
-            LOGGER.error(
-                "sync_failed",
-                run_id=run_id,
-                account_id=account.id,
-                error_code=code_value,
-                error=str(exc),
-            )
+            if already_running:
+                LOGGER.info(
+                    "sync_skipped_already_running",
+                    run_id=run_id,
+                    account_id=account.id,
+                )
+            else:
+                LOGGER.error(
+                    "sync_failed",
+                    run_id=run_id,
+                    account_id=account.id,
+                    error_code=code_value,
+                    error=str(exc),
+                )
             return SyncExecution(
                 run_id,
                 status,

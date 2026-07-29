@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 from icloudharbor.application import HarborApplication
 from icloudharbor.cli import app
 from icloudharbor.config.models import AppConfig
+from icloudharbor.photos.engine import SyncExecution
+from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.models import AuthStatus
 
 
@@ -105,6 +107,35 @@ def test_cli_setup_saves_password_and_starts_first_sync(
     assert "个人图库: ok" in result.stdout
     assert "状态：COMPLETED" in result.stdout
     assert "sync plan" not in result.stdout
+
+
+def test_cli_setup_explains_when_background_sync_is_already_running(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeProtocol()
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+    monkeypatch.setattr("icloudharbor.cli._load_application", lambda _: application)
+    monkeypatch.setattr("icloudharbor.cli.masked_password_prompt", lambda _: "not-stored")
+    monkeypatch.setattr(
+        application,
+        "run_sync",
+        lambda *_args, **_kwargs: SyncExecution(
+            "run-id",
+            "SKIPPED_ALREADY_RUNNING",
+            0,
+            0,
+            0,
+            0,
+            SyncPlan(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["setup", "--account", "personal"])
+
+    assert result.exit_code == 0
+    assert "首次正式同步已在后台运行，本次不重复启动" in result.stdout
+    assert "状态：SKIPPED_ALREADY_RUNNING" not in result.stdout
 
 
 def test_sqlite_online_backup_is_consistent(
