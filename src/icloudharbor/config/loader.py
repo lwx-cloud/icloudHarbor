@@ -1,0 +1,245 @@
+"""YAML loading and the Docker environment override surface."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
+
+import yaml  # type: ignore[import-untyped]
+
+from icloudharbor.config.models import AppConfig
+
+DEFAULT_CONFIG_PATH = Path("/config/config.yaml")
+
+Parser = Callable[[str], object]
+
+
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"布尔环境变量必须是 true/false、yes/no、on/off 或 1/0：{value}")
+
+
+def _parse_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"整数环境变量格式无效：{value}") from exc
+
+
+def _identity(value: str) -> str:
+    return value
+
+
+def _lower(value: str) -> str:
+    return value.lower()
+
+
+def _upper(value: str) -> str:
+    return value.upper()
+
+
+RUNTIME_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
+    ("IH_TIMEZONE", ("timezone",), _identity),
+    ("IH_LOG_LEVEL", ("log_level",), _upper),
+    ("IH_LOG_FORMAT", ("log_format",), _lower),
+)
+
+ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
+    ("IH_ACCOUNT_ID", ("id",), _identity),
+    ("IH_ACCOUNT_NAME", ("name",), _identity),
+    ("IH_APPLE_ID", ("apple_id",), _identity),
+    ("IH_REGION", ("region",), _lower),
+    ("IH_DESTINATION", ("destination", "path"), _identity),
+    ("IH_MOUNTED_MARKER", ("destination", "mounted_marker"), _identity),
+    ("IH_MINIMUM_FREE_SPACE", ("destination", "minimum_free_space"), _identity),
+    ("IH_DOWNLOAD_PHOTOS", ("media", "photos"), _parse_bool),
+    ("IH_DOWNLOAD_VIDEOS", ("media", "videos"), _parse_bool),
+    ("IH_DOWNLOAD_LIVE_PHOTOS", ("media", "live_photos"), _parse_bool),
+    ("IH_PHOTO_VERSION", ("media", "photo_version"), _lower),
+    ("IH_RAW_MODE", ("media", "raw", "mode"), _lower),
+    ("IH_CREATED_AFTER", ("filters", "created_after"), _identity),
+    ("IH_CREATED_BEFORE", ("filters", "created_before"), _identity),
+    ("IH_FAVORITES_ONLY", ("filters", "favorites_only"), _parse_bool),
+    ("IH_INCLUDE_HIDDEN", ("filters", "include_hidden"), _parse_bool),
+    ("IH_FOLDER_STRUCTURE", ("naming", "folder_structure"), _identity),
+    ("IH_FILENAME_TEMPLATE", ("naming", "filename"), _identity),
+    ("IH_CONFLICT_POLICY", ("naming", "conflict_policy"), _lower),
+    ("IH_KEEP_UNICODE", ("naming", "keep_unicode"), _parse_bool),
+    ("IH_SYNC_STRATEGY", ("sync", "strategy"), _lower),
+    ("IH_FULL_SCAN_INTERVAL", ("sync", "full_scan_interval"), _identity),
+    ("IH_RUN_ON_START", ("sync", "run_on_start"), _parse_bool),
+    ("IH_DOWNLOAD_CONCURRENCY", ("download", "concurrency"), _parse_int),
+    ("IH_CHUNK_SIZE", ("download", "chunk_size"), _identity),
+    ("IH_DOWNLOAD_TIMEOUT", ("download", "timeout"), _parse_int),
+    ("IH_MAX_RETRIES", ("download", "max_retries"), _parse_int),
+    ("IH_VERIFY_HASH", ("download", "verify_hash"), _parse_bool),
+    ("IH_KEEP_PARTIAL", ("download", "keep_partial"), _parse_bool),
+)
+
+NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
+    ("IH_NOTIFY_STARTUP", ("startup",), _parse_bool),
+    ("IH_NOTIFY_SUCCESS", ("success",), _parse_bool),
+    ("IH_NOTIFY_NO_CHANGES", ("no_changes",), _parse_bool),
+    ("IH_NOTIFY_FAILURE", ("failure",), _parse_bool),
+    ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
+)
+
+
+def config_path_from_env(explicit: Path | None = None) -> Path:
+    return explicit or Path(os.environ.get("IH_CONFIG_FILE", DEFAULT_CONFIG_PATH))
+
+
+def load_config(path: Path | None = None) -> AppConfig:
+    resolved = config_path_from_env(path)
+    if not resolved.is_file():
+        raise FileNotFoundError(f"配置文件不存在：{resolved}")
+    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件根节点必须是 YAML 对象")
+    data: dict[str, Any] = raw
+    apply_environment_overrides(data)
+    return AppConfig.model_validate(data)
+
+
+def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
+    """Create the initial persisted YAML from Docker parameters and defaults."""
+
+    resolved = config_path_from_env(path)
+    if resolved.is_file():
+        return load_config(resolved), False
+
+    apple_id = _environment_value("IH_APPLE_ID")
+    if apple_id is None:
+        raise ValueError("首次启动需要设置 IH_APPLE_ID；程序会据此自动生成 /config/config.yaml")
+
+    data: dict[str, Any] = {
+        "version": 1,
+        "runtime": {
+            "timezone": "UTC",
+            "database": "/config/database/icloudharbor.db",
+            "temp_path": "/config/tmp",
+        },
+        "accounts": [
+            {
+                "id": "personal",
+                "name": "我的 iCloud",
+                "apple_id": apple_id,
+                "region": "auto",
+                "enabled": True,
+                "libraries": ["root"],
+                "destination": {
+                    "path": "/photos/personal",
+                    "mounted_marker": ".icloudharbor-mounted",
+                    "minimum_free_space": "10GB",
+                },
+                "sync": {
+                    "mode": "backup",
+                    "strategy": "cursor",
+                    "full_scan_interval": "30d",
+                    "schedule": "0 3 * * *",
+                    "run_on_start": False,
+                },
+            }
+        ],
+    }
+    apply_environment_overrides(data)
+    config = AppConfig.model_validate(data)
+    _write_new_config(resolved, config_snapshot(config))
+    return config, True
+
+
+def apply_environment_overrides(data: dict[str, Any]) -> None:
+    """Apply non-secret Docker overrides on top of the YAML configuration."""
+
+    runtime = _mapping(data, "runtime")
+    _apply_mapping(runtime, RUNTIME_ENV_OVERRIDES)
+
+    account_names = {
+        name for name, _, _ in ACCOUNT_ENV_OVERRIDES if _environment_value(name) is not None
+    }
+    schedule = _environment_value("IH_SCHEDULE")
+    interval = _environment_value("IH_SYNC_INTERVAL")
+    if schedule is not None and interval is not None:
+        raise ValueError("IH_SCHEDULE 和 IH_SYNC_INTERVAL 不能同时设置")
+    if schedule is not None or interval is not None:
+        account_names.add("IH_SCHEDULE")
+
+    if account_names:
+        accounts = data.get("accounts")
+        if not isinstance(accounts, list) or len(accounts) != 1:
+            raise ValueError("账号环境变量覆盖要求 YAML 中恰好有一个账号")
+        account = accounts[0]
+        if not isinstance(account, dict):
+            raise ValueError("YAML accounts[0] 必须是对象")
+        _apply_mapping(account, ACCOUNT_ENV_OVERRIDES)
+        sync = _mapping(account, "sync")
+        if schedule is not None:
+            sync["schedule"] = schedule
+        elif interval is not None:
+            sync["schedule"] = {"interval": interval}
+
+    notifications = _mapping(data, "notifications")
+    _apply_mapping(notifications, NOTIFICATION_ENV_OVERRIDES)
+
+
+def _environment_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _apply_mapping(
+    target: dict[str, Any],
+    overrides: tuple[tuple[str, tuple[str, ...], Parser], ...],
+) -> None:
+    for name, path, parser in overrides:
+        raw = _environment_value(name)
+        if raw is None:
+            continue
+        _set_nested(target, path, parser(raw))
+
+
+def _set_nested(target: dict[str, Any], path: tuple[str, ...], value: object) -> None:
+    node = target
+    for key in path[:-1]:
+        node = _mapping(node, key)
+    node[path[-1]] = value
+
+
+def _mapping(target: dict[str, Any], key: str) -> dict[str, Any]:
+    value = target.setdefault(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"YAML {key} 必须是对象")
+    return value
+
+
+def _write_new_config(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = None
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def config_snapshot(config: AppConfig) -> str:
+    """Return stable YAML suitable for revision history (contains no password)."""
+    payload = config.model_dump(mode="json", exclude_none=False)
+    return cast(str, yaml.safe_dump(payload, allow_unicode=True, sort_keys=True))
