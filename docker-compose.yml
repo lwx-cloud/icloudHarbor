@@ -74,7 +74,11 @@ services:
       - SETUID
 
     healthcheck:
-      test: ["CMD", "icloudharbor", "healthcheck", "--liveness"]
+      test:
+        [
+          "CMD-SHELL",
+          'exec /usr/sbin/gosu "$${IH_PUID:-1000}:$${IH_PGID:-1000}" icloudharbor healthcheck --liveness',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
