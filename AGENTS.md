@@ -22,14 +22,14 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.1.2`，支持：
+当前版本为 `0.1.3`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`。
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
-- `icloudharbor setup` 以星号遮罩读取密码、完成认证并保存本地续期凭据。
+- `icloudharbor setup` 以星号遮罩读取密码、完成认证、保存本地续期凭据并立即首次同步。
 - `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码。
 - Cron 或固定间隔调度、启动时同步、增量游标与定期全量扫描。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版选择。
@@ -79,7 +79,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
-- `.env.example`：仅保留首次启动必填 Apple ID 的最小 Docker 参数模板，不包含密码。
+- `.env.example`：包含首次启动必填 Apple ID 和可选企业微信 Docker 参数，不包含 Apple 密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
 - `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
   触发的 Docker Hub 发布。
@@ -190,7 +190,7 @@ docker build .
 - 已在 Synology Docker 环境完成真实 Apple Account 双重认证和个人图库下载闭环。
 - 已验证中国大陆服务区域、星号密码输入、Session 续期、配置自动生成和下载目录保护。
 - 已验证真实日期范围样本能完成照片资源下载。
-- 2026-07-29 发布检查：74 项自动化测试全部通过，代码覆盖率 80%。
+- 2026-07-29 发布检查：76 项自动化测试全部通过，代码覆盖率 80%。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。

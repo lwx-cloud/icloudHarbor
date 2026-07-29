@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from icloudharbor.config.loader import bootstrap_config, load_config
+from icloudharbor.config.loader import bootstrap_config, config_snapshot, load_config
 from icloudharbor.config.models import AccountConfig, AppConfig, NotificationChannelConfig
 from icloudharbor.config.validation import parse_duration, parse_size
 
@@ -126,6 +126,60 @@ def test_environment_override_rejects_ambiguous_schedule(
     monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
 
     with pytest.raises(ValueError, match="不能同时设置"):
+        load_config(path)
+
+
+def test_environment_override_builds_wecom_channel_without_persisting_secret(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "accounts": [account_config.model_dump(mode="json")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_WECOM_ID", "ww123456")
+    monkeypatch.setenv("IH_WECOM_SECRET", "must-not-enter-config")
+    monkeypatch.setenv("IH_WECOM_AGENT_ID", "1000001")
+    monkeypatch.setenv("IH_WECOM_TO_USER", "@all")
+    monkeypatch.setenv("IH_WECOM_PROXY", "https://qyapi.weixin.qq.com")
+    monkeypatch.setenv("IH_WECOM_NAME", "iCloudHarbor")
+
+    config = load_config(path)
+
+    channel = config.notifications.channels[0]
+    assert channel.type == "wecom"
+    assert channel.corp_id == "ww123456"
+    assert channel.agent_id == 1000001
+    assert channel.to_user == "@all"
+    assert channel.corp_secret_file == Path("/config/notification-keys/wecom-secret")
+    assert "must-not-enter-config" not in config_snapshot(config)
+
+
+def test_environment_override_requires_complete_wecom_credentials(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "accounts": [account_config.model_dump(mode="json")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_WECOM_ID", "ww123456")
+
+    with pytest.raises(ValueError, match="IH_WECOM_SECRET"):
         load_config(path)
 
 

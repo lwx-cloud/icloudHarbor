@@ -90,6 +90,8 @@ NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
 )
 
+WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
+
 
 def config_path_from_env(explicit: Path | None = None) -> Path:
     return explicit or Path(os.environ.get("IH_CONFIG_FILE", DEFAULT_CONFIG_PATH))
@@ -186,6 +188,51 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
 
     notifications = _mapping(data, "notifications")
     _apply_mapping(notifications, NOTIFICATION_ENV_OVERRIDES)
+    _apply_wecom_environment(notifications)
+
+
+def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
+    values = {
+        "corp_id": _environment_value("IH_WECOM_ID"),
+        "secret": _environment_value("IH_WECOM_SECRET"),
+        "agent_id": _environment_value("IH_WECOM_AGENT_ID"),
+        "to_user": _environment_value("IH_WECOM_TO_USER"),
+        "server": _environment_value("IH_WECOM_PROXY"),
+        "content_source_url": _environment_value("IH_WECOM_CONTENT_SOURCE_URL"),
+        "name": _environment_value("IH_WECOM_NAME"),
+    }
+    if not any(values.values()):
+        return
+
+    required = {
+        "IH_WECOM_ID": values["corp_id"],
+        "IH_WECOM_SECRET": values["secret"],
+        "IH_WECOM_AGENT_ID": values["agent_id"],
+        "IH_WECOM_TO_USER": values["to_user"],
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise ValueError(f"企业微信 Docker 参数缺少：{', '.join(missing)}")
+
+    channel: dict[str, object] = {
+        "type": "wecom",
+        "enabled": True,
+        "corp_id": values["corp_id"],
+        "corp_secret_file": WECOM_SECRET_FILE,
+        "agent_id": _parse_int(values["agent_id"] or ""),
+        "to_user": values["to_user"],
+    }
+    for key in ("server", "content_source_url", "name"):
+        if values[key] is not None:
+            channel[key] = values[key]
+
+    channels = notifications.setdefault("channels", [])
+    if not isinstance(channels, list):
+        raise ValueError("YAML notifications.channels 必须是数组")
+    channels[:] = [
+        item for item in channels if not isinstance(item, dict) or item.get("type") != "wecom"
+    ]
+    channels.append(channel)
 
 
 def _environment_value(name: str) -> str | None:

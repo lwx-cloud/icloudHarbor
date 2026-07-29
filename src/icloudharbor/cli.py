@@ -188,7 +188,7 @@ def setup(
     ctx: typer.Context,
     account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
 ) -> None:
-    """Configure credentials, authenticate, and probe iCloud Photos."""
+    """Authenticate, persist credentials, and run the first formal sync."""
 
     instance = _load_application(ctx)
     account = _account(instance, account_id)
@@ -232,8 +232,15 @@ def setup(
         raise typer.Exit(1) from exc
     typer.echo("  个人图库: ok")
 
-    typer.echo("5/5 设置完成")
-    typer.echo("下一步：先运行 icloudharbor sync plan，再决定是否执行正式同步。")
+    typer.echo("5/5 设置完成，开始首次正式同步")
+    sync_result = instance.run_sync(account, authenticate=False)
+    typer.echo(
+        f"  状态：{sync_result.status}；下载={sync_result.downloaded_count}；"
+        f"跳过={sync_result.skipped_count}；失败={sync_result.failed_count}；"
+        f"数据={sync_result.bytes_downloaded} 字节"
+    )
+    if sync_result.status in {"FAILED", "PARTIAL"}:
+        raise typer.Exit(1)
 
 
 @session_app.command("renew")

@@ -11,8 +11,8 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.1.2`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
-> 第一次正式使用前请先运行只读计划，并保留其他可靠备份。
+> 当前版本为 `0.1.3`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 请保留其他可靠备份。
 
 ## 功能
 
@@ -134,12 +134,13 @@ docker exec -it icloudharbor icloudharbor setup
 2. 以星号遮罩读取 Apple Account 密码；
 3. 在需要时显示验证码输入提示；
 4. 保存本地加密续期凭据；
-5. 验证个人 iCloud Photos 图库可访问。
+5. 验证个人 iCloud Photos 图库可访问；
+6. 验证码通过后立即执行首次正式同步。
 
 验证码必须在出现 `验证码:` 提示后输入。请勿把验证码直接当作 shell 命令输入。
 
-认证完成后，容器会按照 `config.yaml` 中的调度设置自动同步，不需要再手动执行预览或同步
-命令。需要立即同步、查看计划或排查状态时，再使用后文的运维命令。
+`setup` 会持续运行到首次同步结束，不需要再执行 `sync plan` 或 `sync run`。之后容器会按照
+`config.yaml` 中的调度设置自动同步；计划和手动同步命令只用于高级运维。
 
 ## 群晖示例
 
@@ -163,6 +164,15 @@ IH_PGID=100
 IH_UMASK=0022
 IH_TIMEZONE=Asia/Shanghai
 IH_APPLE_ID=your-account@example.com
+
+# 可选企业微信通知；启用时前四项必须填写
+IH_WECOM_ID=ww0000000000000000
+IH_WECOM_SECRET=your-enterprise-application-secret
+IH_WECOM_AGENT_ID=1000001
+IH_WECOM_TO_USER=@all
+# IH_WECOM_PROXY=https://qyapi.weixin.qq.com
+# IH_WECOM_CONTENT_SOURCE_URL=https://example.com
+# IH_WECOM_NAME=iCloudHarbor
 ```
 
 `1026:100` 只是示例。请在群晖终端运行 `id <用户名>`，填写实际数字 UID/GID，并确保它能

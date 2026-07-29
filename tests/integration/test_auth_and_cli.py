@@ -86,7 +86,7 @@ def test_cli_session_renew_uses_saved_password_without_prompt(
     assert "AUTHENTICATED" in result.stdout
 
 
-def test_cli_setup_saves_password_and_validates_photo_access(
+def test_cli_setup_saves_password_and_starts_first_sync(
     app_config: AppConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,10 +98,13 @@ def test_cli_setup_saves_password_and_validates_photo_access(
     result = CliRunner().invoke(app, ["setup", "--account", "personal"])
 
     assert result.exit_code == 0
-    assert fake.calls == ["logout", "authenticate", "list_libraries", "list_assets"]
+    assert fake.calls[:4] == ["logout", "authenticate", "list_libraries", "list_assets"]
+    assert fake.calls.count("list_assets") == 2
     assert application.credential_store(app_config.accounts[0]).read() == "not-stored"
-    assert "5/5 设置完成" in result.stdout
+    assert "5/5 设置完成，开始首次正式同步" in result.stdout
     assert "个人图库: ok" in result.stdout
+    assert "状态：COMPLETED" in result.stdout
+    assert "sync plan" not in result.stdout
 
 
 def test_sqlite_online_backup_is_consistent(

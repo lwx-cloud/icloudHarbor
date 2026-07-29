@@ -7,7 +7,8 @@ iCloudHarbor 推荐采用与 docker-icloudpd 类似的方式：
 1. `.env` 只填写首次启动必需的参数；
 2. 首次启动自动生成 `/config/config.yaml`；
 3. 其他功能从本文查找参数，按需加入 `.env` 或 `config.yaml`；
-4. Apple 密码、企业微信 Secret、Bot Token 等敏感信息只放在 `/config` 下的密钥文件中。
+4. Apple 密码、验证码、Cookie 和 Bot Token 不进入 `.env`；企业微信 Secret 可从
+   `IH_WECOM_SECRET` 输入，容器会写入 `/config` 下权限为 `0600` 的密钥文件。
 
 > 当前版本仅支持一个 Apple Account、个人图库 `root` 和单向备份，不支持远端删除。
 
@@ -56,7 +57,17 @@ IH_TIMEZONE=Asia/Shanghai
 IH_REGION=china
 ```
 
-不要把 Apple 密码、双重认证验证码、Cookie、企业微信 Secret 或通知 Token 写入 `.env`。
+不要把 Apple 密码、双重认证验证码、Cookie 或其他通知 Token 写入 `.env`。若使用
+`IH_WECOM_SECRET`，请把 `.env` 权限设为 `0600`；Docker 管理员仍可通过容器配置读取它。
+
+可选企业微信通知：
+
+```dotenv
+IH_WECOM_ID=ww0000000000000000
+IH_WECOM_SECRET=your-enterprise-application-secret
+IH_WECOM_AGENT_ID=1000001
+IH_WECOM_TO_USER=@all
+```
 
 ## 3. 首次启动
 
@@ -89,8 +100,9 @@ docker compose up -d
 docker compose exec icloudharbor icloudharbor setup
 ```
 
-`setup` 会以星号遮罩读取 Apple 密码，并把本地续期凭据写入 `/config/credentials`。密码不会
-进入 `.env`、Compose、命令参数或镜像层。
+`setup` 会以星号遮罩读取 Apple 密码，把本地续期凭据写入 `/config/credentials`，并在验证码
+通过、图库检查成功后立即执行首次正式同步。Apple 密码不会进入 `.env`、Compose、命令参数
+或镜像层。
 
 ## 4. Docker 环境变量完整列表
 
@@ -209,8 +221,32 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | `IH_NOTIFY_FAILURE` | 否 | `true` | 失败、部分失败、存储不足等事件通知。 |
 | `IH_NOTIFY_AUTH_REQUIRED` | 否 | `true` | Apple 要求重新认证时通知。 |
 
-环境变量只控制事件开关。Bark、Server酱、Telegram、企业微信和 Webhook 的地址及密钥必须
-写在 `config.yaml`，敏感值放在独立密钥文件中。
+企业微信可直接使用下一节的 `IH_WECOM_*` 参数。Bark、Server酱、Telegram 和 Webhook
+仍通过 `config.yaml` 配置，敏感值放在独立密钥文件中。
+
+### 4.10 企业微信 Docker 参数
+
+企业微信通知是可选的。启用时前四项必须同时填写；含 Secret 的 `.env` 应设置为 `0600`。
+
+| 参数 | 必填 | 默认值 | 对应 icloudpd | 说明 |
+| --- | --- | --- | --- | --- |
+| `IH_WECOM_ID` | **条件必填** | 无 | `wecom_id` | 企业 ID（CORPID）。 |
+| `IH_WECOM_SECRET` | **条件必填** | 无 | `wecom_secret` | 企业应用 Secret；启动时写入权限 `0600` 的内部密钥文件。 |
+| `IH_WECOM_AGENT_ID` | **条件必填** | 无 | `agentid` | 企业应用 Agent ID，必须是正整数。 |
+| `IH_WECOM_TO_USER` | **条件必填** | 无 | `touser` | 接收成员 ID；多个成员用 `|` 分隔，`@all` 表示全部成员。 |
+| `IH_WECOM_PROXY` | 否 | 官方 API | `wecom_proxy` | 企业微信代理 API 根地址。 |
+| `IH_WECOM_CONTENT_SOURCE_URL` | 否 | 无 | `content_source_url` | 配置后发送带“查看详情”的文本卡片。 |
+| `IH_WECOM_NAME` | 否 | 无 | `name` | 消息正文顶部显示的名称。 |
+
+```dotenv
+IH_WECOM_ID=ww0000000000000000
+IH_WECOM_SECRET=your-enterprise-application-secret
+IH_WECOM_AGENT_ID=1000001
+IH_WECOM_TO_USER=@all
+IH_WECOM_PROXY=https://qyapi.weixin.qq.com
+IH_WECOM_CONTENT_SOURCE_URL=https://example.com
+IH_WECOM_NAME=iCloudHarbor
+```
 
 ## 5. `config.yaml` 完整示例
 
@@ -388,7 +424,9 @@ security:
 
 ### 6.6 企业微信参数
 
-企业微信通道本身不是必填项。只有添加 `type: wecom` 后，下表中的核心字段才是条件必填。
+Docker 部署推荐使用 `IH_WECOM_*` 参数；启动脚本会自动创建 Secret 文件并构造通道。
+下列 YAML 是不使用 Docker 环境变量时的高级配置方式。只有添加 `type: wecom` 后，核心字段
+才是条件必填。
 参数含义对应 docker-icloudpd 的 `wecom_id`、`wecom_secret`、`agentid`、`touser` 和
 `wecom_proxy`。
 
@@ -549,7 +587,7 @@ docker compose exec icloudharbor icloudharbor config show
 检查认证：
 
 ```bash
-docker compose exec icloudharbor icloudharbor auth status
+docker compose exec icloudharbor icloudharbor session status
 ```
 
 首次认证或重新认证：
@@ -557,6 +595,8 @@ docker compose exec icloudharbor icloudharbor auth status
 ```bash
 docker compose exec icloudharbor icloudharbor setup
 ```
+
+验证码通过后会立即执行首次正式同步，此命令会持续运行到同步结束。
 
 续期：
 
