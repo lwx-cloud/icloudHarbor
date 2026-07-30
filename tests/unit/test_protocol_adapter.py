@@ -247,6 +247,22 @@ def test_adapter_lists_libraries_and_album_assets_with_limit(tmp_path: Path) -> 
     assert adapter.list_assets(AssetQuery("personal", "shared")) == []
 
 
+def test_adapter_exposes_shared_library_assets(tmp_path: Path) -> None:
+    adapter = PyicloudProtocolAdapter(tmp_path / "sessions", "personal")
+    api = DummyApi()
+    api.photos.libraries["SharedSync-1234"] = DummyLibrary()
+    adapter._api = api
+
+    libraries = adapter.list_libraries()
+    assets = adapter.list_assets(AssetQuery("personal", "SharedSync-1234", limit=1))
+
+    assert any(
+        library.library_id == "SharedSync-1234" and library.library_type == "shared-library"
+        for library in libraries
+    )
+    assert assets[0].library_id == "SharedSync-1234"
+
+
 def test_adapter_requires_authentication_and_classifies_runtime_states(tmp_path: Path) -> None:
     adapter = PyicloudProtocolAdapter(tmp_path / "sessions")
     with pytest.raises(AuthenticationRequired):

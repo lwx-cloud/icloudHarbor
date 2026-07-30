@@ -4,14 +4,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 iCloudHarbor 是一个面向 Linux 和 NAS 的 iCloud Photos Docker 备份工具。它在容器中定时
-读取个人 iCloud 图库，把照片、视频、Live Photo 和 RAW 资源可靠地保存到本地磁盘。
+读取个人或共享 iCloud 图库，把照片、视频、Live Photo 和 RAW 资源可靠地保存到本地磁盘。
 
 Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux/arm64`。
 
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.1.4`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 当前版本为 `0.2.0`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
 > 请保留其他可靠备份。
 
 ## 功能
@@ -20,9 +20,12 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 - 终端以 `*` 显示密码输入，不把密码放入 `.env`、Compose 或命令行参数。
 - 保存本地加密续期凭据；Session 过期后可运行 `session renew`。
 - 支持 Cron、固定间隔、启动时同步、增量游标和定期全量扫描。
-- 支持照片、视频、Live Photo、RAW/JPEG、原片和编辑版。
-- 支持日期、收藏和隐藏项目筛选。
+- 支持个人/共享图库与相册包含、排除，并可用 ID 或名称选择。
+- 支持照片、视频、Live Photo、RAW/JPEG、原片、缩略图和编辑版。
+- 可保留 HEIC/HEIF 原片并额外生成 JPEG。
+- 支持日期、收藏、隐藏、最近 N 项和连续已有项目停止筛选。
 - 支持自定义目录结构、文件名和重名策略。
+- 可指定目录/文件权限，并可 touch 新媒体触发 Synology Photos 索引。
 - 并发流式下载、断点续传、指数退避、大小/SHA-256 校验和原子落盘。
 - SQLite 状态库、运行记录、数据库备份和三层并发锁。
 - 挂载标记、剩余空间、inode、写权限和数据库完整性保护。
@@ -31,8 +34,8 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 
 ## 当前限制
 
-- 只支持一个启用的 Apple Account 和个人图库。
-- 暂不支持共享图库、按相册筛选、安全密钥认证和旧式两步认证。
+- 只支持一个启用的 Apple Account；可同时选择该账号可访问的多个图库。
+- 暂不支持安全密钥认证和旧式两步认证。
 - 不执行远端删除、本地清理或双向同步。
 - Apple Session 文件当前未加密。
 - 项目与 Apple Inc. 无隶属、认可或赞助关系。
@@ -134,7 +137,7 @@ docker exec -it icloudharbor icloudharbor setup
 2. 以星号遮罩读取 Apple Account 密码；
 3. 在需要时显示验证码输入提示；
 4. 保存本地加密续期凭据；
-5. 验证个人 iCloud Photos 图库可访问；
+5. 验证已配置的 iCloud Photos 图库和相册可访问；
 6. 验证码通过后立即执行首次正式同步。
 
 验证码必须在出现 `验证码:` 提示后输入。请勿把验证码直接当作 shell 命令输入。
@@ -196,6 +199,8 @@ docker exec -it icloudharbor icloudharbor session renew
 启用通知通道后，程序会读取 Apple 受信任 Session Cookie 的真实到期时间，默认从到期前
 7 天开始每天最多提醒一次。企业微信可使用与 icloudpd 相同的五个 `MEDIA_ID_*` 配置显示
 下载、启动、警告、认证临期和删除状态封面；本项目不会执行删除，因此删除封面不会触发。
+每次正式同步结束都会立即发送一次同步结果（包括无变化），前提是通知通道已启用；这不是
+额外的通知定时任务。
 
 该命令读取 `setup` 保存的本地凭据；Apple 要求双重认证时，只需再输入验证码。如果 Apple
 密码已经修改、凭据不存在或无法解密，请重新运行：
@@ -246,10 +251,17 @@ docker compose logs --tail=200 icloudharbor
 docker logs -f icloudharbor
 ```
 
-`INFO` 日志会按文件显示 `download_started`、`download_resumed`、`download_completed`、
-`download_retry` 和 `download_failed`。文件使用照片卷内的相对路径，不输出签名下载链接。
-`delete_disabled` 表示当前为单向备份模式：程序不会删除 iCloud 或本地照片。同步计划中的
-已存在文件只显示跳过总数，避免全量扫描时产生海量日志。
+`INFO` 日志对每个文件只显示一条简洁的“正在下载”消息，并使用 `IH_PHOTOS_PATH` 显示
+文件在 Docker 宿主机上的实际路径，例如：
+
+```text
+正在下载：/volume2/photos/iCloud/personal/2026/07/29/IMG_0001.JPG
+```
+
+下载成功后不重复输出完成消息；只有重试或失败时才会增加简短警告。日志不会输出资源 ID
+或签名下载链接。
+容器启动日志会明确显示当前是单向备份安全模式：程序不会删除 iCloud 或本地照片。同步
+计划中的已存在文件只显示跳过总数，避免全量扫描时产生海量日志。
 
 所有 Docker 参数、取值、默认值、YAML 高级配置和完整命令说明见
 [`CONFIGURATION.md`](CONFIGURATION.md)。

@@ -53,3 +53,50 @@ def test_resource_policy_selects_live_raw_jpeg_and_video(
     selected = select_resources(asset, account_config)
     assert "jpeg" not in {resource.resource_id for resource in selected}
     assert "photo" not in {resource.resource_id for resource in selected}
+
+
+def test_resource_policy_selects_requested_photo_and_live_sizes(
+    account_config: AccountConfig,
+) -> None:
+    resources = (
+        RemoteResource("photo-original", "a", "photo_original", "original", "a.heic"),
+        RemoteResource("photo-medium", "a", "photo_medium", "medium", "a.heic"),
+        RemoteResource("photo-thumb", "a", "photo_thumbnail", "thumb", "a.heic"),
+        RemoteResource("video-thumb", "a", "video_thumbnail", "thumb", "a.mov"),
+        RemoteResource("live-original", "a", "live_photo_video", "original_video", "a.mov"),
+        RemoteResource("live-medium", "a", "live_photo_video", "medium_video", "a.mov"),
+        RemoteResource("live-thumb", "a", "live_photo_video", "thumb_video", "a.mov"),
+    )
+    asset, _ = make_asset(asset_id="a", resources=resources)
+    account_config.media.photo_size = ["medium", "thumb"]
+    account_config.media.live_photo_size = "original"
+
+    selected = select_resources(asset, account_config)
+
+    assert {resource.resource_id for resource in selected} == {
+        "photo-medium",
+        "photo-thumb",
+        "video-thumb",
+        "live-original",
+    }
+
+
+def test_live_photo_size_selects_matching_image_and_video_companions(
+    account_config: AccountConfig,
+) -> None:
+    resources = (
+        RemoteResource("image-original", "a", "live_photo_image", "original", "a.heic"),
+        RemoteResource("image-medium", "a", "photo_medium", "medium", "a.heic"),
+        RemoteResource("video-original", "a", "live_photo_video", "original_video", "a.mov"),
+        RemoteResource("video-medium", "a", "live_photo_video", "medium_video", "a.mov"),
+    )
+    asset, _ = make_asset(asset_id="a", resources=resources)
+    asset = replace(asset, metadata={"is_live_photo": True})
+    account_config.media.live_photo_size = "medium"
+
+    selected = select_resources(asset, account_config)
+
+    assert {resource.resource_id for resource in selected} == {
+        "image-medium",
+        "video-medium",
+    }

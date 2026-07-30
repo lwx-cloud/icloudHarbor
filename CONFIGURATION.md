@@ -10,7 +10,9 @@ iCloudHarbor 推荐采用与 docker-icloudpd 类似的方式：
 4. Apple 密码、验证码、Cookie 和 Bot Token 不进入 `.env`；企业微信 Secret 可从
    `IH_WECOM_SECRET` 输入，容器会写入 `/config` 下权限为 `0600` 的密钥文件。
 
-> 当前版本仅支持一个 Apple Account、个人图库 `root` 和单向备份，不支持远端删除。
+> 当前版本支持一个 Apple Account、该账号可访问的个人/共享图库和单向备份；不支持远端
+> 删除。共享图库与相册来自 Apple 私有接口，实际可见范围以 `libraries list` 和
+> `albums list` 的输出为准。
 
 ## 1. 必填规则
 
@@ -112,7 +114,7 @@ docker compose exec icloudharbor icloudharbor setup
 | --- | --- | --- | --- | --- |
 | `IH_CONTAINER_NAME` | 否 | `icloudharbor` | Docker 容器名 | `docker exec` 等命令使用的名称。 |
 | `IH_CONFIG_PATH` | 否 | `./data/config` | 宿主机绝对或相对路径 | 挂载到 `/config`，必须持久化并按敏感数据保护。 |
-| `IH_PHOTOS_PATH` | 否 | `./data/photos` | 宿主机绝对或相对路径 | 挂载到 `/photos`。 |
+| `IH_PHOTOS_PATH` | 否 | `./data/photos` | 宿主机绝对或相对路径 | 挂载到 `/photos`，并用于下载日志显示宿主机实际路径。 |
 | `IH_PUID` | 否 | `1000` | 大于 `0` 的数字 UID | 容器内业务进程和新文件的用户 ID。 |
 | `IH_PGID` | 否 | `1000` | 大于 `0` 的数字 GID | 容器内业务进程和新文件的组 ID。 |
 | `IH_UMASK` | 否 | `0022` | `0000`–`0777` | 新文件和目录的权限掩码。 |
@@ -126,10 +128,11 @@ docker compose exec icloudharbor icloudharbor setup
 | `IH_LOG_LEVEL` | 否 | `INFO` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | 日志等级。 |
 | `IH_LOG_FORMAT` | 否 | `text` | `text`、`json` | NAS 控制台建议使用 `text`，日志平台建议使用 `json`。 |
 
-`IH_LOG_LEVEL=INFO` 时，`docker logs -f icloudharbor` 会按文件显示下载开始、断点续传、
-完成、重试和失败，路径均为照片卷内的相对路径。计划日志提供下载数、跳过数和预计数据量；
-`delete_disabled` 明确表示不会删除 iCloud 或本地照片。第三方 HTTP 请求的 INFO 日志默认
-关闭，标准日志和结构化日志都会对账号、请求头、企业微信密钥及访问令牌进行脱敏。
+`IH_LOG_LEVEL=INFO` 时，容器启动会显示脱敏后的账号、区域、下载目录、文件权限、调度、
+媒体范围和通知状态。同步期间每个待下载资源只输出一条 `正在下载：宿主机实际路径`；成功后
+不再重复输出完成行，只有重试和失败会增加简短消息。扫描结束会显示项目数、下载数、跳过数
+和预计数据量，同步结束会显示结果、耗时、认证到期时间和下一次任务时间。`DEBUG` 才输出
+资源 ID、断点和内部阶段。所有等级都会对账号、请求头、企业微信密钥及访问令牌脱敏。
 
 ### 4.3 Apple Account 与目标目录
 
@@ -139,9 +142,13 @@ docker compose exec icloudharbor icloudharbor setup
 | `IH_ACCOUNT_ID` | 否 | `personal` | 字母/数字开头，后接字母、数字、`_`、`-`，最长 64 | 数据库中的稳定账号 ID，部署后不建议修改。 |
 | `IH_ACCOUNT_NAME` | 否 | `我的 iCloud` | 任意非空文本 | 日志和通知中显示的名称。 |
 | `IH_REGION` | 否 | `auto` | `auto`、`global`、`china` | 中国大陆账号建议使用 `china`；`auto` 会优先复用 Session 区域。 |
+| `IH_LIBRARIES` | 否 | `root` | 逗号分隔的图库 ID 或名称 | 下载一个或多个可访问图库。先用 `icloudharbor libraries list` 查看准确值。 |
 | `IH_DESTINATION` | 否 | `/photos/personal` | 容器内绝对路径 | 下载目标。不要填写 `/volume1/...` 或 `/volume2/...` 宿主机路径。 |
 | `IH_MOUNTED_MARKER` | 否 | `.icloudharbor-mounted` | 单个安全文件名 | 目标目录内必须存在的挂载保护标记。 |
 | `IH_MINIMUM_FREE_SPACE` | 否 | `10GB` | 字节数或 `10GB`、`2GiB` | 下载后必须保留的最小可用空间。 |
+| `IH_DIRECTORY_PERMISSIONS` | 否 | 空 | `750`、`0750`、`0o750` | 非空时把下载目录及新建子目录设为该权限；为空时由 UMASK 决定。 |
+| `IH_FILE_PERMISSIONS` | 否 | 空 | `640`、`0640`、`0o640` | 非空时把下载文件和生成的 JPEG 设为该权限。 |
+| `IH_SYNOLOGY_PHOTOS_APP_FIX` | 否 | `false` | 布尔值 | 下载完成后 touch 文件，帮助 Synology Photos 发现新媒体。 |
 
 ### 4.4 媒体选择
 
@@ -151,7 +158,17 @@ docker compose exec icloudharbor icloudharbor setup
 | `IH_DOWNLOAD_VIDEOS` | 否 | `true` | 布尔值 | 下载普通视频。 |
 | `IH_DOWNLOAD_LIVE_PHOTOS` | 否 | `true` | 布尔值 | 保留 Live Photo 的图片和视频资源。 |
 | `IH_PHOTO_VERSION` | 否 | `original` | `original`、`adjusted`、`both` | 下载原片、编辑版或两者。 |
+| `IH_PHOTO_SIZE` | 否 | 空 | `original`、`medium`、`thumb`、`adjusted`、`alternative`，可逗号组合 | 精确选择照片/普通视频资源尺寸；非空时优先于 `IH_PHOTO_VERSION`。 |
+| `IH_LIVE_PHOTO_SIZE` | 否 | `original` | `original`、`medium`、`thumb` | Live Photo 图片和视频伴随资源的尺寸。 |
 | `IH_RAW_MODE` | 否 | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | RAW/JPEG 伴随资源策略。 |
+| `IH_CONVERT_HEIC_TO_JPEG` | 否 | `false` | 布尔值 | 同步保留 HEIC/HEIF 原片，并额外生成 JPEG。 |
+| `IH_JPEG_PATH` | 否 | 空 | 容器内路径 | JPEG 单独输出根目录；为空时与 HEIC 同目录。若设到 `/photos` 外，必须额外挂载持久化卷。 |
+| `IH_JPEG_QUALITY` | 否 | `90` | `0`–`100` | 生成 JPEG 的质量。 |
+
+`IH_PHOTO_SIZE` 是面向 icloudpd 用户的精确尺寸选项；未设置时继续使用兼容性更好的
+`IH_PHOTO_VERSION` 和 `IH_RAW_MODE`。Apple 没有为某个项目提供所选尺寸时，该资源不会
+凭空生成。转换器永远不会覆盖已经存在的 JPEG；如果同一次计划还要下载同名 JPEG，转换
+文件会自动使用 `_from_HEIC.JPG` 后缀。
 
 ### 4.5 筛选
 
@@ -159,17 +176,32 @@ docker compose exec icloudharbor icloudharbor setup
 | --- | --- | --- | --- | --- |
 | `IH_CREATED_AFTER` | 否 | 空 | 带时区的 ISO 8601 时间 | 只下载不早于此时间的项目。 |
 | `IH_CREATED_BEFORE` | 否 | 空 | 带时区的 ISO 8601 时间 | 只下载不晚于此时间的项目。 |
+| `IH_ALBUMS` | 否 | 空 | 逗号分隔的相册 ID 或名称 | 只扫描指定相册；先用 `icloudharbor albums list` 查看。 |
+| `IH_EXCLUDE_ALBUMS` | 否 | 空 | 逗号分隔的相册 ID 或名称 | 从扫描结果排除指定相册；不能与包含列表重复。 |
 | `IH_FAVORITES_ONLY` | 否 | `false` | 布尔值 | 只下载收藏项目。 |
 | `IH_INCLUDE_HIDDEN` | 否 | `false` | 布尔值 | 是否包含隐藏项目。 |
+| `IH_RECENT_ONLY` | 否 | 空 | 大于 `0` 的整数 | 只处理最近加入的 N 个项目。 |
+| `IH_UNTIL_FOUND` | 否 | 空 | 大于 `0` 的整数 | 按最近加入顺序处理，遇到连续 N 个已完整存在的项目后停止计划。 |
 
 示例：
 
 ```dotenv
 IH_CREATED_AFTER=2026-01-01T00:00:00+08:00
 IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
+IH_ALBUMS=家庭,旅行
+IH_EXCLUDE_ALBUMS=屏幕快照
 ```
 
-当前版本不支持相册包含/排除环境变量。
+相册筛选必须执行全量远端扫描，不使用增量游标。相同照片同时属于多个所选相册时只下载
+一次；`{album}` 使用第一次匹配到的相册名称。相册、`recent_only` 和 `until_found` 扫描
+不会推进完整图库游标，因此以后移除这些限制时会安全地重新全量扫描，不会漏掉旧项目。
+
+认证完成后可查看 Apple 实际返回的 ID 和名称：
+
+```bash
+docker exec icloudharbor icloudharbor libraries list
+docker exec icloudharbor icloudharbor albums list --library root
+```
 
 ### 4.6 文件夹和文件名
 
@@ -187,6 +219,13 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | `{created:%Y/%m/%d}` | 按拍摄时间格式化。格式遵循 Python `strftime`。 |
 | `{original_name}` | iCloud 返回的原始文件名。 |
 | `{asset_id}` | 稳定的远端 Asset ID。 |
+| `{asset_id_short}` | 清理后的 Asset ID 最后 8 位。 |
+| `{account}` | 账号 ID。 |
+| `{library}` | 图库 ID。 |
+| `{album}` | 所选相册名称；未按相册扫描时为空。 |
+| `{added:%Y/%m/%d}` | 按加入 iCloud 的时间格式化。 |
+| `{stem}` / `{extension}` | 原文件名主体和扩展名。 |
+| `{media_type}` | `photo` 或 `video`。 |
 | `{resource_type}` | 资源类型。 |
 | `{version}` | `original` 或 `adjusted` 等版本名称。 |
 
@@ -199,6 +238,7 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | `IH_SCHEDULE` | 否 | `0 3 * * *` | 五段 Cron | 与 `IH_SYNC_INTERVAL` 只能填写一个。 |
 | `IH_SYNC_INTERVAL` | 否 | 空 | `6h`、`12h`、`1d` | 固定间隔，与 `IH_SCHEDULE` 只能填写一个。 |
 | `IH_RUN_ON_START` | 否 | `false` | 布尔值 | 容器启动后是否立即同步一次。 |
+| `IH_DOWNLOAD_DELAY` | 否 | `0` | `0`–`60` 分钟 | 延迟启动同步或固定间隔的第一次执行，适合错开多个容器；Cron 时间不受影响。 |
 
 布尔值接受 `true/false`、`yes/no`、`on/off` 或 `1/0`。
 
@@ -221,14 +261,19 @@ IH_CREATED_BEFORE=2026-12-31T23:59:59+08:00
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `IH_NOTIFY_STARTUP` | 否 | `false` | 容器启动时通知。 |
+| `IH_NOTIFICATION_TITLE` | 否 | `iCloudHarbor` | 通知标题前缀。 |
+| `IH_SILENT_NOTIFICATIONS` | 否 | `false` | 对支持静默的 Bark、Telegram 和 Webhook 使用低打扰方式；企业微信无等价开关。 |
 | `IH_NOTIFY_SUCCESS` | 否 | `true` | 有变化且同步成功时通知。 |
 | `IH_NOTIFY_NO_CHANGES` | 否 | `true` | 没有变化的成功同步也通知；因此每次同步任务结束都有结果消息。 |
 | `IH_NOTIFY_FAILURE` | 否 | `true` | 失败、部分失败、存储不足等事件通知。 |
 | `IH_NOTIFY_AUTH_REQUIRED` | 否 | `true` | Apple 认证临期或要求重新认证时通知。 |
-| `notification_days` | 否 | `7` | 受信任认证到期前多少天开始提醒，范围 `1`–`30`；每天最多一次。 |
+| `IH_NOTIFICATION_DAYS` | 否 | `7` | 受信任认证到期前多少天开始提醒，范围 `1`–`30`；每天最多一次。 |
 
 企业微信可直接使用下一节的 `IH_WECOM_*` 参数。Bark、Server酱、Telegram 和 Webhook
 仍通过 `config.yaml` 配置，敏感值放在独立密钥文件中。
+
+为兼容早期版本，容器仍接受小写 `notification_days`，新部署统一使用
+`IH_NOTIFICATION_DAYS`。
 
 ### 4.10 企业微信 Docker 参数
 
@@ -301,14 +346,22 @@ accounts:
       path: /photos/personal
       mounted_marker: .icloudharbor-mounted
       minimum_free_space: 10GB
+      directory_permissions: null
+      file_permissions: null
+      synology_photos_app_fix: false
 
     media:
       photos: true
       videos: true
       live_photos: true
       photo_version: original
+      photo_size: null
+      live_photo_size: original
       raw:
         mode: both
+      convert_heic_to_jpeg: false
+      jpeg_path: null
+      jpeg_quality: 90
 
     filters:
       albums: []
@@ -317,6 +370,8 @@ accounts:
       created_before: null
       favorites_only: false
       include_hidden: false
+      recent_only: null
+      until_found: null
 
     naming:
       folder_structure: "{created:%Y/%m/%d}"
@@ -330,6 +385,7 @@ accounts:
       full_scan_interval: 30d
       schedule: "0 3 * * *"
       run_on_start: false
+      download_delay: 0
 
     download:
       concurrency: 2
@@ -340,6 +396,8 @@ accounts:
       keep_partial: true
 
 notifications:
+  title: iCloudHarbor
+  silent: false
   startup: false
   success: true
   no_changes: true
@@ -379,26 +437,36 @@ security:
 | `accounts[].apple_id` | **是** | 无 | 邮箱 | Apple Account。 |
 | `accounts[].region` | 否 | `auto` | `auto`、`global`、`china` | iCloud 服务区域。 |
 | `accounts[].enabled` | 否 | `true` | 布尔值 | 当前必须恰好启用一个账号。 |
-| `accounts[].libraries` | 否 | `[root]` | 只能是 `[root]` | 当前只支持个人图库。 |
+| `accounts[].libraries` | 否 | `[root]` | 非空的图库 ID/名称列表 | 可同时选择个人或共享图库；用 `libraries list` 查值。 |
 | `accounts[].destination.path` | **是** | 无 | 容器内绝对路径 | 下载目标。 |
 | `accounts[].destination.mounted_marker` | 否 | `.icloudharbor-mounted` | 单个文件名 | 挂载保护标记。 |
 | `accounts[].destination.minimum_free_space` | 否 | `10GB` | 容量 | 最小剩余空间。 |
+| `accounts[].destination.directory_permissions` | 否 | `null` | 八进制权限 | 目录权限；空值表示由 UMASK 决定。 |
+| `accounts[].destination.file_permissions` | 否 | `null` | 八进制权限 | 文件与生成 JPEG 的权限。 |
+| `accounts[].destination.synology_photos_app_fix` | 否 | `false` | 布尔值 | touch 新下载文件，触发 Synology Photos 索引。 |
 | `accounts[].media.photos` | 否 | `true` | 布尔值 | 下载照片。 |
 | `accounts[].media.videos` | 否 | `true` | 布尔值 | 下载视频。 |
 | `accounts[].media.live_photos` | 否 | `true` | 布尔值 | 下载 Live Photo 资源。 |
 | `accounts[].media.photo_version` | 否 | `original` | `original`、`adjusted`、`both` | 照片版本。 |
+| `accounts[].media.photo_size` | 否 | `null` | 尺寸列表 | 精确选择 `original`、`medium`、`thumb`、`adjusted`、`alternative`；非空时优先于 `photo_version`。 |
+| `accounts[].media.live_photo_size` | 否 | `original` | `original`、`medium`、`thumb` | Live Photo 图片和视频尺寸。 |
 | `accounts[].media.raw.mode` | 否 | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | RAW/JPEG 策略。 |
+| `accounts[].media.convert_heic_to_jpeg` | 否 | `false` | 布尔值 | 保留原片并生成 JPEG。 |
+| `accounts[].media.jpeg_path` | 否 | `null` | 容器内路径 | JPEG 输出根目录；空值表示与 HEIC 同目录。 |
+| `accounts[].media.jpeg_quality` | 否 | `90` | `0`–`100` | JPEG 质量。 |
 
 ### 6.3 筛选、命名、调度和下载
 
 | YAML 参数 | 必填 | 默认值 | 可选值/格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `accounts[].filters.albums` | 否 | `[]` | 当前必须为空 | 相册包含尚未实现。 |
-| `accounts[].filters.exclude_albums` | 否 | `[]` | 当前必须为空 | 相册排除尚未实现。 |
+| `accounts[].filters.albums` | 否 | `[]` | 相册 ID/名称列表 | 只扫描指定相册。 |
+| `accounts[].filters.exclude_albums` | 否 | `[]` | 相册 ID/名称列表 | 排除指定相册。 |
 | `accounts[].filters.created_after` | 否 | `null` | ISO 8601 | 开始时间。 |
 | `accounts[].filters.created_before` | 否 | `null` | ISO 8601 | 结束时间，不能早于开始时间。 |
 | `accounts[].filters.favorites_only` | 否 | `false` | 布尔值 | 只下载收藏。 |
 | `accounts[].filters.include_hidden` | 否 | `false` | 布尔值 | 包含隐藏项目。 |
+| `accounts[].filters.recent_only` | 否 | `null` | 正整数 | 只处理最近加入的 N 个项目。 |
+| `accounts[].filters.until_found` | 否 | `null` | 正整数 | 连续遇到 N 个完整已有项目后停止计划。 |
 | `accounts[].naming.folder_structure` | 否 | `{created:%Y/%m/%d}` | 相对路径模板 | 目录结构。 |
 | `accounts[].naming.filename` | 否 | `{original_name}` | 文件名模板 | 文件名规则。 |
 | `accounts[].naming.conflict_policy` | 否 | `suffix_asset_id` | `suffix_asset_id`、`always_asset_id`、`timestamp`、`error` | 同名策略。 |
@@ -410,6 +478,7 @@ security:
 | `accounts[].sync.schedule.interval` | **条件必填** | 无 | 时长 | 使用调度对象时，与 `cron` 二选一。 |
 | `accounts[].sync.schedule.cron` | **条件必填** | 无 | 五段 Cron | 使用调度对象时，与 `interval` 二选一。 |
 | `accounts[].sync.run_on_start` | 否 | `false` | 布尔值 | 启动即同步。 |
+| `accounts[].sync.download_delay` | 否 | `0` | `0`–`60` | 第一次启动同步的延迟分钟数。 |
 | `accounts[].download.concurrency` | 否 | `2` | `1`–`8` | 下载并发。 |
 | `accounts[].download.chunk_size` | 否 | `1MB` | `64KiB`–`64MiB` | 下载块大小。 |
 | `accounts[].download.timeout` | 否 | `300` | `1`–`3600` | 超时秒数。 |
@@ -421,6 +490,8 @@ security:
 
 | YAML 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| `notifications.title` | 否 | `iCloudHarbor` | 通知标题前缀。 |
+| `notifications.silent` | 否 | `false` | 支持的通道以低打扰方式发送。 |
 | `notifications.startup` | 否 | `false` | 启动通知。 |
 | `notifications.success` | 否 | `true` | 同步成功通知。 |
 | `notifications.no_changes` | 否 | `true` | 无变化也通知，保证每次同步任务结束都有结果消息。 |
@@ -490,6 +561,8 @@ chmod 600 ./data/config/notification-keys/wecom-secret
 
 ```yaml
 notifications:
+  title: iCloudHarbor
+  silent: false
   startup: false
   success: true
   no_changes: true
@@ -560,6 +633,23 @@ Telegram：
 | `security.redact_apple_id` | 否 | `true` | 布尔值 | 日志中隐藏 Apple ID。 |
 | `security.session_encryption` | 否 | `false` | 当前只能是 `false` | Apple Session 文件加密尚未实现。 |
 | `security.allow_remote_delete` | 否 | `false` | 只能是 `false` | 远端删除永久禁用。 |
+
+### 6.9 与 docker-icloudpd 的参数边界
+
+本版本已经覆盖最适合“只读 NAS 备份”的常用能力：图库/相册选择、照片与 Live Photo
+尺寸、`recent_only`、`until_found`、HEIC 转 JPEG、目录/文件权限、首次下载延迟、
+Synology Photos 索引兼容、通知标题/静默，以及企业微信五个媒体 ID。
+
+以下 docker-icloudpd 参数不会照搬：
+
+- `auto_delete`、`delete_after_download`、`keep_icloud_recent_days`：会修改或删除 iCloud
+  内容，违反本项目只读备份规则；
+- `delete_accompanying`、`delete_empty_directories`：会清理本地文件，本项目不自动删除；
+- `nextcloud_*`、`sideways_copy_videos*`：属于上传或二次搬运，不是 iCloud 本地备份；
+- `set_exif_datetime`：会修改下载后的原始媒体，可能破坏哈希幂等判断；
+- `skip_check`、`file_match_policy`：本项目固定使用 SQLite + 文件大小 + 可选 SHA-256
+  校验，不允许跳过安全检查；
+- `single_pass`：需要单次执行时直接使用 `icloudharbor sync run`，不改变常驻容器模型。
 
 ## 7. Synology 路径示例
 

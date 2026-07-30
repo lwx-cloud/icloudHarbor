@@ -44,6 +44,17 @@ def _upper(value: str) -> str:
     return value.upper()
 
 
+def _parse_csv(value: str) -> list[str]:
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        raise ValueError("逗号分隔参数至少需要一个非空值")
+    return items
+
+
+def _parse_csv_lower(value: str) -> list[str]:
+    return [item.lower() for item in _parse_csv(value)]
+
+
 RUNTIME_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_TIMEZONE", ("timezone",), _identity),
     ("IH_LOG_LEVEL", ("log_level",), _upper),
@@ -55,18 +66,35 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_ACCOUNT_NAME", ("name",), _identity),
     ("IH_APPLE_ID", ("apple_id",), _identity),
     ("IH_REGION", ("region",), _lower),
+    ("IH_LIBRARIES", ("libraries",), _parse_csv),
     ("IH_DESTINATION", ("destination", "path"), _identity),
     ("IH_MOUNTED_MARKER", ("destination", "mounted_marker"), _identity),
     ("IH_MINIMUM_FREE_SPACE", ("destination", "minimum_free_space"), _identity),
+    ("IH_DIRECTORY_PERMISSIONS", ("destination", "directory_permissions"), _identity),
+    ("IH_FILE_PERMISSIONS", ("destination", "file_permissions"), _identity),
+    (
+        "IH_SYNOLOGY_PHOTOS_APP_FIX",
+        ("destination", "synology_photos_app_fix"),
+        _parse_bool,
+    ),
     ("IH_DOWNLOAD_PHOTOS", ("media", "photos"), _parse_bool),
     ("IH_DOWNLOAD_VIDEOS", ("media", "videos"), _parse_bool),
     ("IH_DOWNLOAD_LIVE_PHOTOS", ("media", "live_photos"), _parse_bool),
     ("IH_PHOTO_VERSION", ("media", "photo_version"), _lower),
+    ("IH_PHOTO_SIZE", ("media", "photo_size"), _parse_csv_lower),
+    ("IH_LIVE_PHOTO_SIZE", ("media", "live_photo_size"), _lower),
     ("IH_RAW_MODE", ("media", "raw", "mode"), _lower),
+    ("IH_CONVERT_HEIC_TO_JPEG", ("media", "convert_heic_to_jpeg"), _parse_bool),
+    ("IH_JPEG_PATH", ("media", "jpeg_path"), _identity),
+    ("IH_JPEG_QUALITY", ("media", "jpeg_quality"), _parse_int),
+    ("IH_ALBUMS", ("filters", "albums"), _parse_csv),
+    ("IH_EXCLUDE_ALBUMS", ("filters", "exclude_albums"), _parse_csv),
     ("IH_CREATED_AFTER", ("filters", "created_after"), _identity),
     ("IH_CREATED_BEFORE", ("filters", "created_before"), _identity),
     ("IH_FAVORITES_ONLY", ("filters", "favorites_only"), _parse_bool),
     ("IH_INCLUDE_HIDDEN", ("filters", "include_hidden"), _parse_bool),
+    ("IH_RECENT_ONLY", ("filters", "recent_only"), _parse_int),
+    ("IH_UNTIL_FOUND", ("filters", "until_found"), _parse_int),
     ("IH_FOLDER_STRUCTURE", ("naming", "folder_structure"), _identity),
     ("IH_FILENAME_TEMPLATE", ("naming", "filename"), _identity),
     ("IH_CONFLICT_POLICY", ("naming", "conflict_policy"), _lower),
@@ -74,6 +102,7 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_SYNC_STRATEGY", ("sync", "strategy"), _lower),
     ("IH_FULL_SCAN_INTERVAL", ("sync", "full_scan_interval"), _identity),
     ("IH_RUN_ON_START", ("sync", "run_on_start"), _parse_bool),
+    ("IH_DOWNLOAD_DELAY", ("sync", "download_delay"), _parse_int),
     ("IH_DOWNLOAD_CONCURRENCY", ("download", "concurrency"), _parse_int),
     ("IH_CHUNK_SIZE", ("download", "chunk_size"), _identity),
     ("IH_DOWNLOAD_TIMEOUT", ("download", "timeout"), _parse_int),
@@ -83,12 +112,15 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
 )
 
 NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
+    ("IH_NOTIFICATION_TITLE", ("title",), _identity),
+    ("IH_SILENT_NOTIFICATIONS", ("silent",), _parse_bool),
     ("IH_NOTIFY_STARTUP", ("startup",), _parse_bool),
     ("IH_NOTIFY_SUCCESS", ("success",), _parse_bool),
     ("IH_NOTIFY_NO_CHANGES", ("no_changes",), _parse_bool),
     ("IH_NOTIFY_FAILURE", ("failure",), _parse_bool),
     ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
     ("notification_days", ("notification_days",), _parse_int),
+    ("IH_NOTIFICATION_DAYS", ("notification_days",), _parse_int),
 )
 
 WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
@@ -304,4 +336,10 @@ def _write_new_config(path: Path, content: str) -> None:
 def config_snapshot(config: AppConfig) -> str:
     """Return stable YAML suitable for revision history (contains no password)."""
     payload = config.model_dump(mode="json", exclude_none=False)
+    for account in payload["accounts"]:
+        destination = account["destination"]
+        for key in ("directory_permissions", "file_permissions"):
+            mode = destination[key]
+            if isinstance(mode, int):
+                destination[key] = f"{mode:04o}"
     return cast(str, yaml.safe_dump(payload, allow_unicode=True, sort_keys=True))

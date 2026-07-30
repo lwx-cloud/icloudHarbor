@@ -84,8 +84,8 @@ def test_cli_session_renew_uses_saved_password_without_prompt(
     assert result.exit_code == 0
     assert fake.calls == ["logout", "authenticate", "submit_2fa"]
     assert "正在使用本地凭据续期" in result.stdout
-    assert "验证码: 123456" in result.stdout
-    assert "AUTHENTICATED" in result.stdout
+    assert "Apple 双重认证验证码: 123456" in result.stdout
+    assert "认证成功：Apple 会话已建立并受信任" in result.stdout
 
 
 def test_cli_setup_saves_password_and_starts_first_sync(

@@ -152,3 +152,25 @@ def test_wecom_api_error_is_reported_without_secret(tmp_path: Path) -> None:
             assert "private-value" not in str(exc)
         else:
             raise AssertionError("企业微信 API 错误必须引发异常")
+
+
+def test_silent_telegram_notification_sets_disable_notification(tmp_path: Path) -> None:
+    token_file = tmp_path / "telegram-token"
+    token_file.write_text("bot-token", encoding="utf-8")
+    channel = NotificationChannelConfig(
+        type="telegram",
+        token_file=token_file,
+        chat_id="-100123",
+    )
+    event = NotificationEvent(NotificationType.SYNC_COMPLETED, "同步完成", "没有失败")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["disable_notification"] is True
+        assert payload["chat_id"] == "-100123"
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        response = NotifierHub._telegram(client, channel, event, silent=True)
+
+    assert response.status_code == 200

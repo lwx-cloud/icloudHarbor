@@ -11,8 +11,10 @@ import structlog
 
 from icloudharbor.config.models import AccountConfig
 from icloudharbor.database.repository import StateRepository
+from icloudharbor.download.postprocess import MediaPostProcessor
 from icloudharbor.download.retry import retry_delay
 from icloudharbor.download.verifier import verify_file
+from icloudharbor.observability.paths import display_download_path
 from icloudharbor.photos.planner import DownloadTask, SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError, ProtocolError
@@ -48,12 +50,39 @@ class DownloadManager:
         self.repository = repository
         self.account = account
         self.destination = account.destination.path.resolve()
+        self.postprocessor = MediaPostProcessor(account)
 
     def execute(self, plan: SyncPlan) -> DownloadReport:
         tasks = [*plan.downloads, *plan.updates]
-        if not tasks:
-            return DownloadReport(0, 0, 0, ())
+        self.postprocessor.protect_download_paths(
+            {task.relative_path for task in [*tasks, *plan.skips]}
+        )
         outcomes: list[DownloadOutcome] = []
+        for task in plan.skips:
+            source = self.destination / task.relative_path
+            try:
+                self.postprocessor.process_existing(source, task.relative_path)
+            except (OSError, ValueError) as exc:
+                path = display_download_path(
+                    self.account.destination.path,
+                    task.relative_path,
+                )
+                LOGGER.error(f"生成 JPEG 失败：{path}；原因：{exc}")
+                outcomes.append(
+                    DownloadOutcome(
+                        task,
+                        False,
+                        error_code=ErrorCode.DATA_INTEGRITY_ERROR.value,
+                        message=str(exc),
+                    )
+                )
+        if not tasks:
+            return DownloadReport(
+                0,
+                sum(not outcome.success for outcome in outcomes),
+                0,
+                tuple(outcomes),
+            )
         with ThreadPoolExecutor(
             max_workers=self.account.download.concurrency,
             thread_name_prefix="icloudharbor-download",
@@ -64,14 +93,9 @@ class DownloadManager:
                     outcomes.append(future.result())
                 except Exception as exc:  # defensive containment for worker failures
                     task = futures[future]
+                    path = display_download_path(self.account.destination.path, task.relative_path)
                     LOGGER.error(
-                        "download_failed",
-                        account_id=self.account.id,
-                        asset_id=task.asset.asset_id,
-                        resource_id=task.resource.resource_id,
-                        file=task.relative_path.as_posix(),
-                        error_code=ErrorCode.UNKNOWN_PROTOCOL_ERROR.value,
-                        error=f"{type(exc).__name__}: {exc}",
+                        f"下载失败：{path}；原因：{type(exc).__name__}: {exc}",
                     )
                     outcomes.append(
                         DownloadOutcome(
@@ -90,27 +114,13 @@ class DownloadManager:
 
     def _download_with_retry(self, task: DownloadTask) -> DownloadOutcome:
         last_error: Exception | None = None
+        path = display_download_path(self.account.destination.path, task.relative_path)
+        LOGGER.info(f"正在下载：{path}")
         for attempt in range(self.account.download.max_retries + 1):
-            LOGGER.info(
-                "download_started",
-                account_id=self.account.id,
-                asset_id=task.asset.asset_id,
-                resource_id=task.resource.resource_id,
-                file=task.relative_path.as_posix(),
-                expected_bytes=task.resource.size,
-                attempt=attempt + 1,
-                repair=task.repair,
-            )
             try:
                 size = self._download_once(task)
-                LOGGER.info(
-                    "download_completed",
-                    account_id=self.account.id,
-                    asset_id=task.asset.asset_id,
-                    resource_id=task.resource.resource_id,
-                    file=task.relative_path.as_posix(),
-                    bytes_downloaded=size,
-                )
+                target = (self.destination / task.relative_path).resolve()
+                self.postprocessor.process_download(target, task.relative_path)
                 return DownloadOutcome(task, True, bytes_downloaded=size)
             except (HarborError, ProtocolError, OSError) as exc:
                 last_error = exc
@@ -118,26 +128,14 @@ class DownloadManager:
                     break
                 delay = retry_delay(attempt)
                 LOGGER.warning(
-                    "download_retry",
-                    account_id=self.account.id,
-                    asset_id=task.asset.asset_id,
-                    resource_id=task.resource.resource_id,
-                    file=task.relative_path.as_posix(),
-                    attempt=attempt + 1,
-                    retry_in_seconds=round(delay, 2),
-                    error=str(exc),
+                    f"下载重试：{path}；{round(delay, 2)} 秒后重试；原因：{exc}",
                 )
                 time.sleep(delay)
         code = getattr(last_error, "code", ErrorCode.UNKNOWN_PROTOCOL_ERROR)
         code_value = code.value if isinstance(code, ErrorCode) else str(code)
         LOGGER.error(
-            "download_failed",
-            account_id=self.account.id,
-            asset_id=task.asset.asset_id,
-            resource_id=task.resource.resource_id,
-            file=task.relative_path.as_posix(),
-            error_code=code_value,
-            error=str(last_error) if last_error else "未知下载错误",
+            f"下载失败：{path}；错误码：{code_value}；"
+            f"原因：{last_error if last_error else '未知下载错误'}",
         )
         return DownloadOutcome(
             task,
@@ -150,7 +148,7 @@ class DownloadManager:
         target = (self.destination / task.relative_path).resolve()
         if not target.is_relative_to(self.destination):
             raise HarborError("下载路径越过目标目录", ErrorCode.FILE_PERMISSION_ERROR)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        self.postprocessor.prepare_parent(target.parent)
         partial = target.with_name(f"{target.name}.part")
         offset = (
             partial.stat().st_size if partial.exists() and self.account.download.keep_partial else 0
@@ -165,14 +163,7 @@ class DownloadManager:
             offset = 0
             stream = self.protocol.open_resource(task.resource, offset=0)
         if offset:
-            LOGGER.info(
-                "download_resumed",
-                account_id=self.account.id,
-                asset_id=task.asset.asset_id,
-                resource_id=task.resource.resource_id,
-                file=task.relative_path.as_posix(),
-                offset_bytes=offset,
-            )
+            LOGGER.debug(f"从断点继续下载：{target.as_posix()}；已完成 {offset} 字节")
 
         mode = "ab" if offset else "wb"
         try:

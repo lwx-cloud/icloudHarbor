@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from structlog.testing import capture_logs
@@ -9,7 +10,14 @@ from tests.conftest import FakeProtocol, make_asset
 from icloudharbor.application import HarborApplication
 from icloudharbor.config.models import AppConfig
 from icloudharbor.notify.base import DeliveryResult, NotificationType
-from icloudharbor.protocol.models import RemoteResource
+from icloudharbor.observability.paths import display_download_path
+from icloudharbor.protocol.models import (
+    AssetQuery,
+    RemoteAlbum,
+    RemoteAsset,
+    RemoteLibrary,
+    RemoteResource,
+)
 
 
 def test_first_run_downloads_and_second_run_is_idempotent(
@@ -32,12 +40,40 @@ def test_first_run_downloads_and_second_run_is_idempotent(
     assert second.skipped_count == 1
     assert fake.calls.count("open_resource:resource-1") == 1
     events = [entry["event"] for entry in logs]
-    assert "download_started" in events
-    assert "download_completed" in events
-    assert "delete_disabled" in events
-    assert next(entry for entry in logs if entry["event"] == "download_started")["file"] == (
-        "2026/07/29/IMG_0001.JPG"
+    assert f"正在下载：{target.as_posix()}" in events
+    assert not any("下载完成" in event or "已下载到" in event for event in events)
+
+
+def test_download_log_uses_docker_host_photo_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IH_PHOTOS_PATH", "/volume2/ceshi/icloudharbor")
+
+    path = display_download_path(
+        Path("/photos/personal"),
+        Path("2021/08/28/IMG_4969.HEIC"),
     )
+
+    assert path == "/volume2/ceshi/icloudharbor/personal/2021/08/28/IMG_4969.HEIC"
+
+
+def test_missing_recorded_file_is_downloaded_again_to_the_same_path(
+    app_config: AppConfig,
+) -> None:
+    asset, content = make_asset()
+    fake = FakeProtocol([asset], content)
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+    account = app_config.accounts[0]
+    target = account.destination.path / "2026/07/29/IMG_0001.JPG"
+
+    first = application.run_sync(account)
+    target.unlink()
+    second = application.run_sync(account, force_full_scan=True)
+
+    assert first.status == "COMPLETED"
+    assert second.status == "COMPLETED"
+    assert second.downloaded_count == 1
+    assert second.skipped_count == 0
+    assert target.read_bytes() == content["resource-1"]
+    assert fake.calls.count("open_resource:resource-1") == 2
 
 
 def test_auth_expiration_notification_is_sent_at_most_once_per_day(
@@ -59,6 +95,25 @@ def test_auth_expiration_notification_is_sent_at_most_once_per_day(
 
     assert events.count(NotificationType.AUTH_EXPIRING) == 1
     assert events.count(NotificationType.SYNC_COMPLETED) == 2
+
+
+def test_notification_title_is_configurable(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    app_config.notifications.title = "家庭相册"
+    titles: list[str] = []
+
+    def send(event: object) -> list[DeliveryResult]:
+        titles.append(event.title)  # type: ignore[attr-defined]
+        return [DeliveryResult("wecom", True, 200)]
+
+    monkeypatch.setattr(application.notifier, "send", send)
+
+    application.run_sync(app_config.accounts[0])
+
+    assert "家庭相册 同步完成" in titles
 
 
 def test_dry_run_does_not_create_formal_or_partial_file(
@@ -122,15 +177,11 @@ def test_partial_file_resumes_with_range(app_config: AppConfig) -> None:
     partial.parent.mkdir(parents=True)
     partial.write_bytes(data[:4])
 
-    with capture_logs() as logs:
-        result = application.run_sync(account)
+    result = application.run_sync(account)
 
     assert result.status == "COMPLETED"
     assert fake.offsets == [4]
     assert partial.with_suffix("").read_bytes() == data
-    assert (
-        next(entry for entry in logs if entry["event"] == "download_resumed")["offset_bytes"] == 4
-    )
 
 
 def test_same_remote_filename_does_not_overwrite(app_config: AppConfig) -> None:
@@ -154,6 +205,125 @@ def test_same_remote_filename_does_not_overwrite(app_config: AppConfig) -> None:
     assert result.downloaded_count == 2
     assert (folder / "IMG_0001.JPG").read_bytes() == b"first"
     assert (folder / "IMG_0001_BBB22222.JPG").read_bytes() == b"second"
+
+
+def test_album_include_and_exclude_filters_are_applied(app_config: AppConfig) -> None:
+    included, included_content = make_asset(
+        asset_id="asset-included",
+        resource_id="resource-included",
+        filename="INCLUDED.JPG",
+        data=b"included",
+    )
+    excluded, excluded_content = make_asset(
+        asset_id="asset-excluded",
+        resource_id="resource-excluded",
+        filename="EXCLUDED.JPG",
+        data=b"excluded",
+    )
+
+    class AlbumProtocol(FakeProtocol):
+        def list_albums(self, library_id: str) -> list[RemoteAlbum]:
+            return [
+                RemoteAlbum("family-id", library_id, "家庭"),
+                RemoteAlbum("excluded-id", library_id, "排除"),
+            ]
+
+        def list_assets(self, query: AssetQuery) -> list[RemoteAsset]:
+            if query.album_id == "family-id":
+                return [included, excluded]
+            if query.album_id == "excluded-id":
+                return [excluded]
+            return [included, excluded]
+
+    fake = AlbumProtocol(content={**included_content, **excluded_content})
+    account = app_config.accounts[0]
+    account.filters.albums = ["家庭"]
+    account.filters.exclude_albums = ["排除"]
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+
+    result = application.run_sync(account, force_full_scan=True)
+
+    folder = account.destination.path / "2026/07/29"
+    assert result.status == "COMPLETED"
+    assert result.downloaded_count == 1
+    assert (folder / "INCLUDED.JPG").is_file()
+    assert not (folder / "EXCLUDED.JPG").exists()
+    library_state = application.repository.library_state(account.id, "root")
+    assert library_state is not None
+    assert library_state[1] is None
+
+
+def test_multiple_libraries_are_scanned_in_one_plan(app_config: AppConfig) -> None:
+    personal, personal_content = make_asset(
+        asset_id="asset-personal",
+        resource_id="resource-personal",
+        filename="PERSONAL.JPG",
+    )
+    shared, shared_content = make_asset(
+        asset_id="asset-shared",
+        resource_id="resource-shared",
+        filename="SHARED.JPG",
+    )
+
+    class LibraryProtocol(FakeProtocol):
+        def list_libraries(self) -> list[RemoteLibrary]:
+            return [
+                RemoteLibrary("root", "个人图库", "personal"),
+                RemoteLibrary("SharedSync", "共享图库", "shared-library"),
+            ]
+
+        def list_assets(self, query: AssetQuery) -> list[RemoteAsset]:
+            return [personal] if query.library_id == "root" else [shared]
+
+    fake = LibraryProtocol(content={**personal_content, **shared_content})
+    account = app_config.accounts[0]
+    account.libraries = ["个人图库", "共享图库"]
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+
+    result = application.run_sync(account, force_full_scan=True)
+
+    folder = account.destination.path / "2026/07/29"
+    assert result.status == "COMPLETED"
+    assert result.downloaded_count == 2
+    assert (folder / "PERSONAL.JPG").is_file()
+    assert (folder / "SHARED.JPG").is_file()
+
+
+def test_until_found_stops_after_configured_consecutive_existing_assets(
+    app_config: AppConfig,
+) -> None:
+    existing, existing_content = make_asset(
+        asset_id="asset-existing",
+        resource_id="resource-existing",
+        filename="EXISTING.JPG",
+    )
+    first_new, first_content = make_asset(
+        asset_id="asset-new-1",
+        resource_id="resource-new-1",
+        filename="NEW_1.JPG",
+    )
+    later_new, later_content = make_asset(
+        asset_id="asset-new-2",
+        resource_id="resource-new-2",
+        filename="NEW_2.JPG",
+    )
+    fake = FakeProtocol([existing], existing_content)
+    account = app_config.accounts[0]
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+    application.run_sync(account)
+    fake.assets = [first_new, existing, later_new]
+    fake.content.update({**first_content, **later_content})
+    account.filters.until_found = 1
+
+    result = application.run_sync(account, force_full_scan=True)
+
+    folder = account.destination.path / "2026/07/29"
+    assert result.downloaded_count == 1
+    assert (folder / "NEW_1.JPG").is_file()
+    assert not (folder / "NEW_2.JPG").exists()
+    library_state = application.repository.library_state(account.id, "root")
+    assert library_state is not None
+    assert library_state[1] is None
 
 
 def test_live_photo_is_complete_only_after_both_resources_download(

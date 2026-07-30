@@ -37,7 +37,7 @@ from icloudharbor.protocol.models import (
 
 
 class PyicloudProtocolAdapter(ICloudProtocol):
-    capability_version = "pyicloud-2.6.5/cursor-reconcile"
+    capability_version = "pyicloud-2.6.5/libraries-albums-cursor-reconcile"
 
     def __init__(
         self,
@@ -159,45 +159,109 @@ class PyicloudProtocolAdapter(ICloudProtocol):
         return None
 
     def list_libraries(self) -> list[RemoteLibrary]:
-        self._require_authenticated()
-        return [RemoteLibrary("root", "个人图库", "personal")]
+        api = self._require_api()
+        try:
+            libraries = api.photos.libraries
+            result: list[RemoteLibrary] = []
+            for library_id in libraries:
+                if library_id == "root":
+                    name, library_type = "个人图库", "personal"
+                elif library_id == "shared":
+                    name, library_type = "共享相册", "shared-albums"
+                else:
+                    name, library_type = str(library_id), "shared-library"
+                result.append(RemoteLibrary(str(library_id), name, library_type))
+            return result
+        except Exception as exc:
+            raise self._map_exception(exc) from exc
 
     def list_albums(self, library_id: str) -> list[RemoteAlbum]:
         api = self._require_api()
-        if library_id != "root":
-            return []
         try:
-            container = api.photos.albums
+            library = api.photos.libraries.get(library_id)
+            if library is None:
+                return []
+            container = getattr(library, "albums", None)
+            if container is None and library_id == "root":
+                container = api.photos.albums
+            if container is None:
+                return []
             result: list[RemoteAlbum] = []
-            names = container.keys() if hasattr(container, "keys") else []
-            for name in names:
-                album = container[name]
+            if hasattr(container, "items"):
+                entries = container.items()
+            else:
+                entries = ((None, item) for item in container)
+            for key, album in entries:
                 album_id = str(
                     getattr(album, "id", None)
                     or getattr(album, "guid", None)
                     or getattr(album, "name", None)
-                    or name
+                    or getattr(album, "fullname", None)
+                    or key
                 )
-                result.append(RemoteAlbum(album_id, library_id, str(name)))
+                name = str(
+                    getattr(album, "fullname", None)
+                    or getattr(album, "name", None)
+                    or key
+                    or album_id
+                )
+                result.append(
+                    RemoteAlbum(
+                        album_id,
+                        library_id,
+                        name,
+                        str(getattr(album, "type", None) or "album"),
+                    )
+                )
             return result
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
     def list_assets(self, query: AssetQuery) -> list[RemoteAsset]:
         api = self._require_api()
-        if query.library_id != "root":
-            return []
         try:
-            album = api.photos.all
+            library = api.photos.libraries.get(query.library_id)
+            if library is None:
+                return []
             if query.album_id:
-                albums = api.photos.albums
-                album = albums[query.album_id]
+                albums = getattr(library, "albums", None)
+                if albums is None and query.library_id == "root":
+                    albums = api.photos.albums
+                if albums is None:
+                    raise ProtocolError(
+                        f"图库不提供相册访问：{query.library_id}",
+                        ErrorCode.REMOTE_NOT_FOUND,
+                    )
+                album = albums.get(query.album_id)
+                if album is None and hasattr(albums, "find"):
+                    album = albums.find(query.album_id)
+                if album is None:
+                    raise ProtocolError(
+                        f"相册不存在：{query.album_id}",
+                        ErrorCode.REMOTE_NOT_FOUND,
+                    )
+                sources = (album,)
+            elif query.library_id == "root" and hasattr(api.photos, "all"):
+                sources = (api.photos.all,)
+            elif hasattr(library, "all"):
+                sources = (library.all,)
+            else:
+                sources = tuple(library.albums)
+
             result: list[RemoteAsset] = []
-            for index, asset in enumerate(album):
-                if query.limit is not None and index >= query.limit:
-                    break
-                result.append(self._normalize_asset(query, asset))
+            seen: set[str] = set()
+            for source in sources:
+                for asset in source:
+                    normalized = self._normalize_asset(query, asset)
+                    if normalized.asset_id in seen:
+                        continue
+                    seen.add(normalized.asset_id)
+                    result.append(normalized)
+                    if query.limit is not None and len(result) >= query.limit:
+                        return result
             return result
+        except ProtocolError:
+            raise
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
@@ -305,23 +369,7 @@ class PyicloudProtocolAdapter(ICloudProtocol):
         resource: RemoteResource,
         offset: int,
     ) -> Any:
-        album = api.photos.all
-        getter = getattr(album, "get", None)
-        asset = getter(resource.asset_id) if callable(getter) else None
-        if asset is None:
-            asset = next(
-                (
-                    candidate
-                    for candidate in album
-                    if str(
-                        getattr(candidate, "id", None)
-                        or getattr(candidate, "guid", None)
-                        or getattr(candidate, "record_name", None)
-                    )
-                    == resource.asset_id
-                ),
-                None,
-            )
+        asset = self._find_asset(api, resource.asset_id)
         if asset is None:
             raise ProtocolError("远端资源不存在", ErrorCode.REMOTE_NOT_FOUND)
 
@@ -346,6 +394,30 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                 )
             return response
         return asset.download(resource.version)
+
+    @staticmethod
+    def _find_asset(api: Any, asset_id: str) -> Any | None:
+        for library_id, library in api.photos.libraries.items():
+            if library_id == "root" and hasattr(api.photos, "all"):
+                sources = (api.photos.all,)
+            elif hasattr(library, "all"):
+                sources = (library.all,)
+            else:
+                sources = tuple(library.albums)
+            for source in sources:
+                getter = getattr(source, "get", None)
+                asset = getter(asset_id) if callable(getter) else None
+                if asset is not None:
+                    return asset
+                for candidate in source:
+                    candidate_id = str(
+                        getattr(candidate, "id", None)
+                        or getattr(candidate, "guid", None)
+                        or getattr(candidate, "record_name", None)
+                    )
+                    if candidate_id == asset_id:
+                        return candidate
+        return None
 
     def logout(self) -> None:
         self._api = None

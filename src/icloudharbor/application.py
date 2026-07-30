@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -103,6 +104,8 @@ class HarborApplication:
         force_full_scan: bool = False,
         authenticate: bool = True,
     ) -> SyncExecution:
+        started = time.monotonic()
+        LOGGER.info(f"同步开始：{account.name}")
         if authenticate:
             with suppress(Exception):
                 self.ensure_session(account)
@@ -122,6 +125,21 @@ class HarborApplication:
             self.database,
             self.locks,
         ).run(account, dry_run=dry_run, force_full_scan=force_full_scan)
+        elapsed = int(time.monotonic() - started)
+        LOGGER.info(
+            f"同步结束：状态={result.status}；下载={result.downloaded_count}；"
+            f"跳过={result.skipped_count}；失败={result.failed_count}；"
+            f"用时={elapsed // 3600:02d}:{elapsed % 3600 // 60:02d}:{elapsed % 60:02d}"
+        )
+        expires_at = self.protocol(account).session_expires_at()
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            local_expiry = expires_at.astimezone(ZoneInfo(self.config.runtime.timezone))
+            remaining = max(0, math.ceil((expires_at - datetime.now(UTC)).total_seconds() / 86400))
+            LOGGER.info(
+                f"Apple 认证到期时间：{local_expiry:%Y-%m-%d %H:%M:%S}；剩余约 {remaining} 天"
+            )
         self._notify_sync(account, result)
         return result
 
@@ -148,7 +166,7 @@ class HarborApplication:
         results = self.notifier.send(
             NotificationEvent(
                 NotificationType.AUTH_EXPIRING,
-                "iCloudHarbor 认证即将到期",
+                f"{self.config.notifications.title} 认证即将到期",
                 (
                     f"账号：{account.name}\n"
                     f"认证将在 {days_remaining} 天内到期，请运行 session renew。"
@@ -187,7 +205,7 @@ class HarborApplication:
             return
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED
-            title = "iCloudHarbor 同步完成"
+            title = f"{self.config.notifications.title} 同步完成"
         elif result.error_code in {
             "AUTH_REQUIRED",
             "TERMS_REQUIRED",
@@ -195,13 +213,13 @@ class HarborApplication:
             "ADP_APPROVAL_REQUIRED",
         }:
             event_type = NotificationType.AUTH_REQUIRED
-            title = "iCloudHarbor 需要重新认证"
+            title = f"{self.config.notifications.title} 需要重新认证"
         elif result.status == "PARTIAL":
             event_type = NotificationType.SYNC_PARTIAL
-            title = "iCloudHarbor 同步部分失败"
+            title = f"{self.config.notifications.title} 同步部分失败"
         else:
             event_type = NotificationType.SYNC_FAILED
-            title = "iCloudHarbor 同步失败"
+            title = f"{self.config.notifications.title} 同步失败"
         self.notifier.send(
             NotificationEvent(
                 event_type,

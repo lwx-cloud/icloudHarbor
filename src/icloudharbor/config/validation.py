@@ -65,3 +65,23 @@ def parse_duration(value: int | str | timedelta) -> timedelta:
     if not match:
         raise ValueError(f"无法识别时长：{value!r}")
     return timedelta(seconds=float(match.group(1)) * _DURATION_UNITS[match.group(2).lower()])
+
+
+def parse_file_mode(value: int | str) -> int:
+    """Return a POSIX permission mode from ``750``, ``0750`` or an integer."""
+
+    if isinstance(value, bool):
+        raise ValueError("布尔值不是合法的权限模式")
+    if isinstance(value, int):
+        if 0 <= value <= 0o777:
+            return value
+        raise ValueError("权限模式必须在 0000 到 0777 之间")
+    normalized = value.strip().lower()
+    if normalized.startswith("0o"):
+        normalized = normalized[2:]
+    if not re.fullmatch(r"[0-7]{3,4}", normalized):
+        raise ValueError(f"无法识别权限模式：{value!r}")
+    parsed = int(normalized, 8)
+    if parsed > 0o777:
+        raise ValueError("权限模式必须在 0000 到 0777 之间")
+    return parsed

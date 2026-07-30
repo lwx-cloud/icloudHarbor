@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from icloudharbor.config.validation import parse_duration, parse_size
+from icloudharbor.config.validation import parse_duration, parse_file_mode, parse_size
 
 
 class StrictModel(BaseModel):
@@ -34,6 +34,9 @@ class DestinationConfig(StrictModel):
     path: Path
     mounted_marker: str = ".icloudharbor-mounted"
     minimum_free_space: int = 10_000_000_000
+    directory_permissions: int | None = None
+    file_permissions: int | None = None
+    synology_photos_app_fix: bool = False
 
     @field_validator("minimum_free_space", mode="before")
     @classmethod
@@ -49,6 +52,15 @@ class DestinationConfig(StrictModel):
             raise ValueError("mounted_marker 必须是单个安全文件名")
         return value
 
+    @field_validator("directory_permissions", "file_permissions", mode="before")
+    @classmethod
+    def validate_permissions(cls, value: object) -> int | None:
+        if value is None:
+            return None
+        if not isinstance(value, str | int) or isinstance(value, bool):
+            raise ValueError("权限必须是 0750 形式的八进制模式")
+        return parse_file_mode(value)
+
 
 class RawConfig(StrictModel):
     mode: Literal["raw_only", "jpeg_only", "both", "prefer_raw", "prefer_jpeg"] = "both"
@@ -59,7 +71,26 @@ class MediaConfig(StrictModel):
     videos: bool = True
     live_photos: bool = True
     photo_version: Literal["original", "adjusted", "both"] = "original"
+    photo_size: list[Literal["original", "medium", "thumb", "adjusted", "alternative"]] | None = (
+        None
+    )
+    live_photo_size: Literal["original", "medium", "thumb"] = "original"
     raw: RawConfig = Field(default_factory=RawConfig)
+    convert_heic_to_jpeg: bool = False
+    jpeg_path: Path | None = None
+    jpeg_quality: Annotated[int, Field(ge=0, le=100)] = 90
+
+    @field_validator("photo_size")
+    @classmethod
+    def validate_photo_size(
+        cls,
+        value: list[str] | None,
+    ) -> list[str] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("photo_size 不能为空")
+        return list(dict.fromkeys(value))
 
 
 class FilterConfig(StrictModel):
@@ -69,6 +100,8 @@ class FilterConfig(StrictModel):
     created_before: datetime | None = None
     favorites_only: bool = False
     include_hidden: bool = False
+    recent_only: Annotated[int, Field(ge=1)] | None = None
+    until_found: Annotated[int, Field(ge=1)] | None = None
 
     @model_validator(mode="after")
     def validate_date_range(self) -> FilterConfig:
@@ -123,6 +156,7 @@ class SyncConfig(StrictModel):
     full_scan_interval: timedelta = timedelta(days=30)
     schedule: str | ScheduleConfig | None = None
     run_on_start: bool = False
+    download_delay: Annotated[int, Field(ge=0, le=60)] = 0
 
     @field_validator("full_scan_interval", mode="before")
     @classmethod
@@ -182,13 +216,13 @@ class AccountConfig(StrictModel):
             raise ValueError("apple_id 格式无效")
         return value
 
-    @model_validator(mode="after")
-    def validate_v01_scope(self) -> AccountConfig:
-        if self.libraries != ["root"]:
-            raise ValueError("v0.1 仅支持个人图库 libraries: [root]")
-        if self.filters.albums or self.filters.exclude_albums:
-            raise ValueError("v0.1 尚未实现按相册筛选，请保持相册筛选为空")
-        return self
+    @field_validator("libraries")
+    @classmethod
+    def validate_libraries(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        if not cleaned:
+            raise ValueError("libraries 至少需要一个图库 ID 或名称")
+        return list(dict.fromkeys(cleaned))
 
 
 class NotificationChannelConfig(StrictModel):
@@ -234,6 +268,8 @@ class NotificationChannelConfig(StrictModel):
 
 
 class NotificationsConfig(StrictModel):
+    title: str = "iCloudHarbor"
+    silent: bool = False
     startup: bool = False
     success: bool = True
     no_changes: bool = True
@@ -241,6 +277,14 @@ class NotificationsConfig(StrictModel):
     auth_required: bool = True
     notification_days: Annotated[int, Field(ge=1, le=30)] = 7
     channels: list[NotificationChannelConfig] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("通知标题不能为空")
+        return value
 
 
 class SecurityConfig(StrictModel):
@@ -259,10 +303,10 @@ class AppConfig(StrictModel):
     @model_validator(mode="after")
     def validate_unique_accounts(self) -> AppConfig:
         if self.security.session_encryption:
-            raise ValueError("v0.1 尚未实现 Session 加密，请保持 session_encryption=false")
+            raise ValueError("当前版本尚未实现 Session 加密，请保持 session_encryption=false")
         enabled = [account for account in self.accounts if account.enabled]
         if len(enabled) != 1:
-            raise ValueError("v0.1 必须且只能启用一个账号")
+            raise ValueError("当前版本必须且只能启用一个账号")
         ids = [account.id for account in self.accounts]
         if len(ids) != len(set(ids)):
             raise ValueError("账号 id 必须唯一")

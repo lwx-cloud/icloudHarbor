@@ -11,7 +11,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 项目只做“远端到本地”的备份：
 
-- 从 Apple iCloud Photos 个人图库读取照片、视频、Live Photo 和 RAW 伴随资源。
+- 从 Apple iCloud Photos 的个人/共享图库读取照片、视频、Live Photo 和 RAW 伴随资源。
 - 根据日期、媒体类型和命名规则生成确定的本地路径。
 - 使用 `.part` 文件、断点续传、重试、大小与 SHA-256 校验完成下载。
 - 使用 SQLite 保存远端资源、本地文件、同步游标、运行结果和锁状态。
@@ -22,10 +22,10 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.1.4`，支持：
+当前版本为 `0.2.0`，支持：
 
 - 一个启用的 Apple Account。
-- 个人图库 `root`。
+- 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
@@ -33,25 +33,26 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码。
 - Cron 或固定间隔调度、启动时同步、增量游标与定期全量扫描。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
-- 照片、视频、Live Photo、RAW/JPEG、原片/编辑版选择。
-- 日期、收藏、隐藏项目筛选。
+- 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
+- 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
+- 可选的文件/目录权限和 Synology Photos touch 索引兼容。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 - 企业微信兼容 icloudpd 的五个媒体 ID，并按真实 Cookie 到期时间提前 7 天每日提醒一次。
 - 每次同步任务结束都发送结果通知，包括首次、手动、调度以及没有新文件的成功同步；通知
   没有独立定时器，认证临期只在同步时检查并单独按天去重。
-- 容器 INFO 日志按文件显示下载、断点续传、重试、完成和失败，并抑制第三方 HTTP 请求日志。
+- 容器 INFO 日志输出脱敏启动摘要，每个文件只显示一次“正在下载”，并汇总结果和下次任务；
+  断点与内部资源信息仅在 DEBUG 输出。
 - amd64 与 arm64 Docker 构建。
 
 明确未支持：
 
-- 多个启用账号、共享图库和多图库同步。
-- 按相册包含或排除。
+- 多个启用账号。
 - 安全密钥和旧式两步认证的交互流程。
 - iCloud Session 文件加密。
 - 任何远端删除、本地清理、镜像同步或 Web UI。
 
-配置模型会对未实现能力“失败关闭”：`libraries` 只能是 `[root]`，相册筛选必须为空，
-`session_encryption` 必须为 `false`，`allow_remote_delete` 只能为 `false`。
+配置模型会对危险或未实现能力“失败关闭”：`session_encryption` 必须为 `false`，
+`allow_remote_delete` 只能为 `false`。
 
 ## 3. 运行流程
 
@@ -66,8 +67,8 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 一次同步依次经过：
 
 1. 检查目标目录、挂载标记、可写性、剩余空间、inode 和 SQLite。
-2. 恢复 Apple Session，并确认个人图库可访问。
-3. 根据策略执行游标扫描或全量扫描。
+2. 恢复 Apple Session，并确认所选图库和相册可访问。
+3. 根据图库、相册与筛选策略执行游标扫描或全量扫描。
 4. 标准化远端 Asset/Resource，应用媒体和日期策略。
 5. 与 SQLite 和磁盘状态比对，生成下载、修复和跳过计划。
 6. 并发流式下载到同目录 `.part` 文件，校验后原子替换正式文件。
@@ -112,6 +113,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `photos/policies.py`：媒体、RAW、版本、收藏、隐藏和日期策略。
 - `photos/naming.py`：安全路径渲染、跨平台字符清理和冲突处理。
 - `download/manager.py`：并发下载、断点续传、重试和原子落盘。
+- `download/postprocess.py`：文件权限、HEIC 转 JPEG 和 Synology Photos 索引触发。
 - `download/verifier.py`：大小与 SHA-256 校验。
 - `download/retry.py`：带随机抖动的指数退避。
 - `database/models.py`：SQLite 数据结构。
@@ -122,6 +124,8 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `notify/base.py`：通知事件路由和五种通知通道。
 - `observability/logging.py`：文本/JSON 结构化日志、第三方日志降噪和标准日志脱敏。
 - `observability/health.py`：存活与就绪检查。
+- `observability/paths.py`：把容器内照片路径映射为宿主机展示路径。
+- `observability/startup.py`：脱敏启动与认证配置摘要。
 
 ## 5. 持久化数据
 
@@ -195,7 +199,8 @@ docker build .
 - 已在 Synology Docker 环境完成真实 Apple Account 双重认证和个人图库下载闭环。
 - 已验证中国大陆服务区域、星号密码输入、Session 续期、配置自动生成和下载目录保护。
 - 已验证真实日期范围样本能完成照片资源下载。
-- 2026-07-29 发布检查：87 项自动化测试全部通过，代码覆盖率 80%。
+- 2026-07-30 的 0.2.0 发布检查：103 项自动化测试全部通过，覆盖率 81%；包含多图库、
+  相册、尺寸、HEIC 转换、权限、调度延迟和通知回归测试。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。

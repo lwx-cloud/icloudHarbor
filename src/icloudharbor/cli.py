@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+import structlog
 import typer
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
@@ -25,11 +26,14 @@ from icloudharbor.config.models import AccountConfig
 from icloudharbor.notify import NotificationEvent
 from icloudharbor.notify.base import NotificationType
 from icloudharbor.observability.logging import configure_logging
+from icloudharbor.observability.startup import log_startup_summary, startup_summary
 from icloudharbor.photos.engine import SyncExecution
 from icloudharbor.protocol.models import AssetQuery, AuthResult, AuthStatus
 from icloudharbor.scheduler.service import SchedulerService
 from icloudharbor.security.prompt import masked_password_prompt
 from icloudharbor.security.redaction import redact
+
+LOGGER = structlog.get_logger(__name__)
 
 app = typer.Typer(
     name="icloudharbor",
@@ -154,15 +158,17 @@ def _authenticate_account(
 ) -> AuthResult:
     try:
         manager = instance.auth_manager(account)
+        typer.echo("正在验证 Apple Account 凭据……")
         result = manager.login(password)
         if result.status == AuthStatus.TWO_FACTOR_REQUIRED:
-            typer.echo("需要双重认证。")
-            code = typer.prompt("验证码", hide_input=False)
+            typer.echo("Apple 要求双重认证，请在受信任设备上查看 6 位验证码。")
+            code = typer.prompt("Apple 双重认证验证码", hide_input=False)
             result = manager.verify(result.challenge_id or "", code)
             code = ""
-        typer.echo(f"{result.status.value}：{result.message or ''}")
         if result.status != AuthStatus.AUTHENTICATED:
+            typer.echo(f"认证未完成：{result.message or result.status.value}", err=True)
             raise typer.Exit(1)
+        typer.echo("认证成功：Apple 会话已建立并受信任。")
         return result
     except typer.Exit:
         raise
@@ -192,7 +198,9 @@ def setup(
 
     instance = _load_application(ctx)
     account = _account(instance, account_id)
-    typer.echo(f"设置账号：{account.id}（{_display_apple_id(instance, account)}）")
+    typer.echo("***** iCloudHarbor 初始化 *****")
+    for line in startup_summary(instance.config, account, ctx.obj):
+        typer.echo(f"  {line}")
 
     health = instance.health.readiness()
     typer.echo("1/5 配置、数据库和下载目录检查")
@@ -220,18 +228,44 @@ def setup(
     typer.echo("4/5 iCloud Photos 访问检查")
     try:
         protocol = instance.protocol(account)
-        libraries = {item.library_id for item in protocol.list_libraries()}
-        if "root" not in libraries:
-            typer.echo("个人图库不可访问。", err=True)
+        libraries = protocol.list_libraries()
+        by_selector = {
+            selector: library
+            for library in libraries
+            for selector in (library.library_id, library.name)
+        }
+        missing = [selector for selector in account.libraries if selector not in by_selector]
+        if missing:
+            typer.echo(f"图库不可访问：{', '.join(missing)}", err=True)
             raise typer.Exit(1)
-        protocol.list_assets(AssetQuery(account.id, "root", limit=1))
+        for selector in account.libraries:
+            library = by_selector[selector]
+            album_id = None
+            configured_albums = [
+                *account.filters.albums,
+                *account.filters.exclude_albums,
+            ]
+            if configured_albums:
+                albums = protocol.list_albums(library.library_id)
+                by_album = {key: album for album in albums for key in (album.album_id, album.name)}
+                missing_albums = [name for name in configured_albums if name not in by_album]
+                if missing_albums:
+                    typer.echo(
+                        f"图库 {library.name} 中相册不可访问：{', '.join(missing_albums)}",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                if account.filters.albums:
+                    album_id = by_album[account.filters.albums[0]].album_id
+            protocol.list_assets(
+                AssetQuery(account.id, library.library_id, album_id=album_id, limit=1)
+            )
+            typer.echo(f"  {library.name}: ok")
     except typer.Exit:
         raise
     except Exception as exc:
         typer.echo(f"iCloud Photos 检查失败：{exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo("  个人图库: ok")
-
     typer.echo("5/5 设置完成，开始首次正式同步")
     sync_result = instance.run_sync(account, authenticate=False)
     if sync_result.status == "SKIPPED_ALREADY_RUNNING":
@@ -481,21 +515,32 @@ def healthcheck(
 def daemon(ctx: typer.Context) -> None:
     """Run the container's foreground scheduler without opening a network port."""
     instance = _load_application(ctx)
+    account = instance.config.account()
+    log_startup_summary(instance.config, account, ctx.obj)
+    credential_status = "已保存" if instance.credential_store(account).exists() else "未保存"
+    LOGGER.info(f"本地续期凭据：{credential_status}")
+    LOGGER.info(f"Apple 会话状态：{instance.repository.get_auth_status(account.id).value}")
+    LOGGER.info("安全模式：只从 iCloud 备份到本地，不会删除云端或本地文件")
 
     def scheduled(account_id: str) -> None:
         account = instance.config.account(account_id)
         instance.run_sync(account)
+        for job_id, run_at in scheduler.next_run_times():
+            if job_id == f"sync:{account_id}":
+                LOGGER.info(f"下一次同步：{run_at:%Y-%m-%d %H:%M:%S %Z}")
 
     scheduler = SchedulerService(instance.config, scheduled)
     scheduler.start()
     instance.notifier.send(
         NotificationEvent(
             NotificationType.APP_STARTED,
-            "iCloudHarbor 已启动",
+            f"{instance.config.notifications.title} 已启动",
             "容器调度器已启动，等待下一次同步计划。",
         )
     )
-    typer.echo("iCloudHarbor 调度器已启动。")
+    LOGGER.info("iCloudHarbor 调度器已启动")
+    for job_id, run_at in scheduler.next_run_times():
+        LOGGER.info(f"下一次任务：{job_id}；{run_at:%Y-%m-%d %H:%M:%S %Z}")
     stopped = threading.Event()
 
     def stop(_: int, __: object) -> None:
@@ -506,4 +551,4 @@ def daemon(ctx: typer.Context) -> None:
     while not stopped.wait(30):
         pass
     scheduler.shutdown(wait=True)
-    typer.echo("iCloudHarbor 已安全停止。")
+    LOGGER.info("iCloudHarbor 已安全停止")

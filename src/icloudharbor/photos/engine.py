@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import structlog
@@ -21,7 +21,13 @@ from icloudharbor.protocol.exceptions import (
     ErrorCode,
     HarborError,
 )
-from icloudharbor.protocol.models import AssetQuery, AuthStatus, RemoteAsset
+from icloudharbor.protocol.models import (
+    AssetQuery,
+    AuthStatus,
+    RemoteAlbum,
+    RemoteAsset,
+    RemoteLibrary,
+)
 from icloudharbor.scheduler.locks import LockCoordinator
 
 LOGGER = structlog.get_logger(__name__)
@@ -76,11 +82,12 @@ class PhotosEngine:
     ) -> SyncExecution:
         run_id = self.repository.create_run(account.id, dry_run=dry_run)
         plan = SyncPlan()
-        lock_name = f"sync:{account.id}:root"
+        lock_name = f"sync:{account.id}"
         try:
             with self.locks.acquire(lock_name):
                 self._event(run_id, "PRECHECK", "开始同步前安全检查")
                 self._precheck(account)
+                LOGGER.info("下载目录、挂载保护、剩余空间和数据库检查通过")
                 self._event(run_id, "AUTH_CHECK", "检查 Apple 会话")
                 if self.protocol.auth_status() != AuthStatus.AUTHENTICATED:
                     stored_status = self.repository.get_auth_status(account.id)
@@ -98,17 +105,15 @@ class PhotosEngine:
                     raise AuthenticationRequired()
 
                 self._event(run_id, "DISCOVER", "发现远端图库")
-                available = {item.library_id: item for item in self.protocol.list_libraries()}
-                selected = [
-                    available[library_id]
-                    for library_id in account.libraries
-                    if library_id in available
-                ]
+                available_libraries = self.protocol.list_libraries()
+                selected = self._select_libraries(account, available_libraries)
                 if not selected:
                     raise HarborError("配置的图库不存在或不可访问", ErrorCode.ACCESS_DENIED)
 
                 cursor_updates: list[tuple[str, str | None, bool]] = []
+                discovered_assets: list[RemoteAsset] = []
                 for library in selected:
+                    LOGGER.info(f"正在扫描图库：{library.name}")
                     self.repository.upsert_library(account.id, library)
                     assets, cursor, was_full = self._scan_library(
                         account,
@@ -116,11 +121,10 @@ class PhotosEngine:
                         force_full_scan=force_full_scan,
                     )
                     cursor_updates.append((library.library_id, cursor, was_full))
-                    library_plan = self.planner.build(assets, account)
-                    plan.downloads.extend(library_plan.downloads)
-                    plan.updates.extend(library_plan.updates)
-                    plan.skips.extend(library_plan.skips)
-                    plan.warnings.extend(library_plan.warnings)
+                    discovered_assets.extend(assets)
+
+                limited_assets = self._limit_assets(account, discovered_assets)
+                plan = self.planner.build(limited_assets, account)
 
                 self._event(
                     run_id,
@@ -133,10 +137,8 @@ class PhotosEngine:
                     },
                 )
                 LOGGER.info(
-                    "delete_disabled",
-                    run_id=run_id,
-                    account_id=account.id,
-                    message="备份模式：不会删除 iCloud 或本地照片",
+                    f"扫描完成：项目={len(limited_assets)}；待下载={plan.download_count}；"
+                    f"已存在={len(plan.skips)}；预计数据={plan.estimated_bytes} 字节"
                 )
                 self._check_plan_space(account, plan)
 
@@ -208,19 +210,9 @@ class PhotosEngine:
                 payload={"error_code": code_value},
             )
             if already_running:
-                LOGGER.info(
-                    "sync_skipped_already_running",
-                    run_id=run_id,
-                    account_id=account.id,
-                )
+                LOGGER.info("已有同步任务正在运行，本次不重复启动")
             else:
-                LOGGER.error(
-                    "sync_failed",
-                    run_id=run_id,
-                    account_id=account.id,
-                    error_code=code_value,
-                    error=str(exc),
-                )
+                LOGGER.error(f"同步失败：错误码={code_value}；原因={exc}")
             return SyncExecution(
                 run_id,
                 status,
@@ -241,6 +233,11 @@ class PhotosEngine:
         force_full_scan: bool,
     ) -> tuple[list[RemoteAsset], str | None, bool]:
         state = self.repository.library_state(account.id, library_id)
+        if account.filters.albums or account.filters.exclude_albums:
+            assets = self._scan_filtered_library(account, library_id)
+            # A scoped album scan is not a complete view of the library. Clear
+            # its cursor so removing the filter later forces a safe full scan.
+            return assets, None, False
         cursor = state[1] if state else None
         last_full = self._aware(state[2]) if state and state[2] else None
         full_due = (
@@ -254,9 +251,161 @@ class PhotosEngine:
                 return list(batch.assets), batch.cursor, False
             except CursorInvalid:
                 use_full = True
-        query = AssetQuery(account.id, library_id)
+        query = AssetQuery(
+            account.id,
+            library_id,
+            limit=account.filters.recent_only,
+        )
         assets = self.protocol.list_assets(query)
+        if account.filters.recent_only is not None or account.filters.until_found is not None:
+            # These options deliberately truncate the plan. Do not advance the
+            # complete-library cursor beyond resources the user has not seen.
+            return assets, None, False
         return assets, self.protocol.get_sync_cursor(library_id), True
+
+    def _scan_filtered_library(
+        self,
+        account: AccountConfig,
+        library_id: str,
+    ) -> list[RemoteAsset]:
+        available = self.protocol.list_albums(library_id)
+        included = self._resolve_albums(account.filters.albums, available, library_id)
+        excluded = self._resolve_albums(account.filters.exclude_albums, available, library_id)
+        excluded_asset_ids: set[str] = set()
+        for album in excluded:
+            excluded_asset_ids.update(
+                asset.asset_id
+                for asset in self.protocol.list_assets(
+                    AssetQuery(account.id, library_id, album_id=album.album_id)
+                )
+            )
+
+        sources: list[tuple[RemoteAlbum | None, list[RemoteAsset]]]
+        if included:
+            sources = [
+                (
+                    album,
+                    self.protocol.list_assets(
+                        AssetQuery(
+                            account.id,
+                            library_id,
+                            album_id=album.album_id,
+                            limit=account.filters.recent_only,
+                        )
+                    ),
+                )
+                for album in included
+            ]
+        else:
+            sources = [
+                (
+                    None,
+                    self.protocol.list_assets(
+                        AssetQuery(
+                            account.id,
+                            library_id,
+                            limit=(None if excluded else account.filters.recent_only),
+                        )
+                    ),
+                )
+            ]
+
+        result: list[RemoteAsset] = []
+        seen: set[str] = set()
+        for source_album, assets in sources:
+            for asset in assets:
+                if asset.asset_id in excluded_asset_ids or asset.asset_id in seen:
+                    continue
+                seen.add(asset.asset_id)
+                if source_album is not None:
+                    metadata = dict(asset.metadata)
+                    metadata["album_id"] = source_album.album_id
+                    metadata["album_name"] = source_album.name
+                    asset = replace(asset, metadata=metadata)
+                result.append(asset)
+        return result
+
+    def _limit_assets(
+        self,
+        account: AccountConfig,
+        assets: list[RemoteAsset],
+    ) -> list[RemoteAsset]:
+        ordered = sorted(
+            assets,
+            key=lambda asset: asset.added_at or asset.created_at,
+            reverse=True,
+        )
+        if account.filters.recent_only is not None:
+            ordered = ordered[: account.filters.recent_only]
+        if account.filters.until_found is None:
+            return ordered
+
+        selected: list[RemoteAsset] = []
+        consecutive_existing = 0
+        for asset in ordered:
+            preview = self.planner.build([asset], account)
+            selected.append(asset)
+            if preview.download_count == 0 and preview.skips:
+                consecutive_existing += 1
+                if consecutive_existing >= account.filters.until_found:
+                    break
+            else:
+                consecutive_existing = 0
+        return selected
+
+    @staticmethod
+    def _select_libraries(
+        account: AccountConfig,
+        available: list[RemoteLibrary],
+    ) -> list[RemoteLibrary]:
+        by_selector: dict[str, RemoteLibrary] = {}
+        for library in available:
+            library_id = library.library_id
+            name = library.name
+            by_selector[library_id] = library
+            by_selector.setdefault(name, library)
+        missing = [selector for selector in account.libraries if selector not in by_selector]
+        if missing:
+            raise HarborError(
+                f"图库不存在或不可访问：{', '.join(missing)}",
+                ErrorCode.REMOTE_NOT_FOUND,
+            )
+        selected: list[RemoteLibrary] = []
+        seen: set[str] = set()
+        for selector in account.libraries:
+            library = by_selector[selector]
+            library_id = library.library_id
+            if library_id not in seen:
+                seen.add(library_id)
+                selected.append(library)
+        return selected
+
+    @staticmethod
+    def _resolve_albums(
+        selectors: list[str],
+        available: list[RemoteAlbum],
+        library_id: str,
+    ) -> list[RemoteAlbum]:
+        if not selectors:
+            return []
+        by_selector: dict[str, RemoteAlbum] = {}
+        for album in available:
+            by_selector[album.album_id] = album
+            by_selector.setdefault(album.name, album)
+        missing = [selector for selector in selectors if selector not in by_selector]
+        if missing:
+            raise HarborError(
+                f"图库 {library_id} 中不存在相册：{', '.join(missing)}",
+                ErrorCode.REMOTE_NOT_FOUND,
+            )
+        result: list[RemoteAlbum] = []
+        seen: set[str] = set()
+        for selector in selectors:
+            album = by_selector[selector]
+            if album.album_id not in seen:
+                seen.add(album.album_id)
+                result.append(album)
+        return result
 
     def _precheck(self, account: AccountConfig) -> None:
         destination = account.destination.path
@@ -318,7 +467,7 @@ class PhotosEngine:
             asset_id=asset_id,
             payload=payload,
         )
-        LOGGER.info(
+        LOGGER.debug(
             event_type.lower(),
             run_id=run_id,
             asset_id=asset_id,

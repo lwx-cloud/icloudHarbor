@@ -8,13 +8,29 @@ from pydantic import ValidationError
 
 from icloudharbor.config.loader import bootstrap_config, config_snapshot, load_config
 from icloudharbor.config.models import AccountConfig, AppConfig, NotificationChannelConfig
-from icloudharbor.config.validation import parse_duration, parse_size
+from icloudharbor.config.validation import parse_duration, parse_file_mode, parse_size
 
 
 def test_human_values() -> None:
     assert parse_size("1MB") == 1_000_000
     assert parse_size("1 MiB") == 1_048_576
     assert parse_duration("30d").days == 30
+    assert parse_file_mode("0750") == 0o750
+    assert parse_file_mode("0o640") == 0o640
+
+
+def test_config_snapshot_keeps_permission_modes_human_readable(
+    app_config: AppConfig,
+) -> None:
+    destination = app_config.accounts[0].destination
+    destination.directory_permissions = 0o750
+    destination.file_permissions = 0o640
+
+    snapshot = config_snapshot(app_config)
+
+    assert "directory_permissions: '0750'" in snapshot
+    assert "file_permissions: '0640'" in snapshot
+    assert AppConfig.model_validate(yaml.safe_load(snapshot)) == app_config
 
 
 def test_only_backup_mode_is_accepted(account_config: AccountConfig) -> None:
@@ -37,23 +53,23 @@ def test_unimplemented_session_encryption_fails_closed(
         )
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("libraries", ["root", "shared"], "仅支持个人图库"),
-        ("filters", {"albums": ["家庭"]}, "尚未实现按相册筛选"),
-    ],
-)
-def test_unimplemented_library_scopes_fail_closed(
-    account_config: AccountConfig,
-    field: str,
-    value: object,
-    message: str,
-) -> None:
+def test_library_and_album_scopes_are_configurable(account_config: AccountConfig) -> None:
     payload = account_config.model_dump(mode="json")
-    payload[field] = value
-    with pytest.raises(ValidationError, match=message):
-        AccountConfig.model_validate(payload)
+    payload["libraries"] = ["root", "SharedSync"]
+    payload["filters"] = {
+        "albums": ["家庭"],
+        "exclude_albums": ["截图"],
+        "recent_only": 500,
+        "until_found": 20,
+    }
+
+    configured = AccountConfig.model_validate(payload)
+
+    assert configured.libraries == ["root", "SharedSync"]
+    assert configured.filters.albums == ["家庭"]
+    assert configured.filters.exclude_albums == ["截图"]
+    assert configured.filters.recent_only == 500
+    assert configured.filters.until_found == 20
 
 
 def test_v01_requires_exactly_one_enabled_account(account_config: AccountConfig) -> None:
@@ -87,11 +103,27 @@ def test_environment_override_supports_common_docker_parameters(
     monkeypatch.setenv("IH_LOG_FORMAT", "JSON")
     monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
     monkeypatch.setenv("IH_REGION", "china")
+    monkeypatch.setenv("IH_LIBRARIES", "root,SharedSync")
     monkeypatch.setenv("IH_DESTINATION", "/photos/docker")
+    monkeypatch.setenv("IH_DIRECTORY_PERMISSIONS", "0750")
+    monkeypatch.setenv("IH_FILE_PERMISSIONS", "0640")
+    monkeypatch.setenv("IH_SYNOLOGY_PHOTOS_APP_FIX", "true")
     monkeypatch.setenv("IH_DOWNLOAD_VIDEOS", "false")
+    monkeypatch.setenv("IH_PHOTO_SIZE", "original,adjusted")
+    monkeypatch.setenv("IH_LIVE_PHOTO_SIZE", "thumb")
+    monkeypatch.setenv("IH_CONVERT_HEIC_TO_JPEG", "true")
+    monkeypatch.setenv("IH_JPEG_PATH", "/photos/jpeg")
+    monkeypatch.setenv("IH_JPEG_QUALITY", "85")
+    monkeypatch.setenv("IH_ALBUMS", "家庭,旅行")
+    monkeypatch.setenv("IH_EXCLUDE_ALBUMS", "截图")
+    monkeypatch.setenv("IH_RECENT_ONLY", "500")
+    monkeypatch.setenv("IH_UNTIL_FOUND", "20")
     monkeypatch.setenv("IH_FOLDER_STRUCTURE", "{created:%Y/%m}")
     monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
+    monkeypatch.setenv("IH_DOWNLOAD_DELAY", "15")
     monkeypatch.setenv("IH_DOWNLOAD_CONCURRENCY", "4")
+    monkeypatch.setenv("IH_NOTIFICATION_TITLE", "家庭 iCloud")
+    monkeypatch.setenv("IH_SILENT_NOTIFICATIONS", "true")
     monkeypatch.setenv("IH_NOTIFY_NO_CHANGES", "yes")
     config = load_config(path)
 
@@ -99,11 +131,27 @@ def test_environment_override_supports_common_docker_parameters(
     assert config.runtime.log_format == "json"
     assert config.accounts[0].apple_id == "docker@example.com"
     assert config.accounts[0].region == "china"
+    assert config.accounts[0].libraries == ["root", "SharedSync"]
     assert config.accounts[0].destination.path == Path("/photos/docker")
+    assert config.accounts[0].destination.directory_permissions == 0o750
+    assert config.accounts[0].destination.file_permissions == 0o640
+    assert config.accounts[0].destination.synology_photos_app_fix is True
     assert config.accounts[0].media.videos is False
+    assert config.accounts[0].media.photo_size == ["original", "adjusted"]
+    assert config.accounts[0].media.live_photo_size == "thumb"
+    assert config.accounts[0].media.convert_heic_to_jpeg is True
+    assert config.accounts[0].media.jpeg_path == Path("/photos/jpeg")
+    assert config.accounts[0].media.jpeg_quality == 85
+    assert config.accounts[0].filters.albums == ["家庭", "旅行"]
+    assert config.accounts[0].filters.exclude_albums == ["截图"]
+    assert config.accounts[0].filters.recent_only == 500
+    assert config.accounts[0].filters.until_found == 20
     assert config.accounts[0].naming.folder_structure == "{created:%Y/%m}"
     assert config.accounts[0].sync.schedule
+    assert config.accounts[0].sync.download_delay == 15
     assert config.accounts[0].download.concurrency == 4
+    assert config.notifications.title == "家庭 iCloud"
+    assert config.notifications.silent is True
     assert config.notifications.no_changes is True
 
 
@@ -155,7 +203,7 @@ def test_environment_override_builds_wecom_channel_without_persisting_secret(
     monkeypatch.setenv("media_id_warning", "warning-media")
     monkeypatch.setenv("media_id_expiration", "expiration-media")
     monkeypatch.setenv("media_id_delete", "delete-media")
-    monkeypatch.setenv("notification_days", "5")
+    monkeypatch.setenv("IH_NOTIFICATION_DAYS", "5")
 
     config = load_config(path)
 

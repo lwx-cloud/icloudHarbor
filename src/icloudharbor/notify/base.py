@@ -11,9 +11,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+import structlog
 
 from icloudharbor.config.models import NotificationChannelConfig, NotificationsConfig
 from icloudharbor.security.secrets import read_secret
+
+LOGGER = structlog.get_logger(__name__)
 
 
 class NotificationType(StrEnum):
@@ -77,18 +80,30 @@ class NotifierHub:
         channel: NotificationChannelConfig,
         event: NotificationEvent,
     ) -> DeliveryResult:
+        channel_name = {
+            "bark": "Bark",
+            "serverchan": "Server酱",
+            "telegram": "Telegram",
+            "wecom": "企业微信",
+            "webhook": "Webhook",
+        }[channel.type]
+        LOGGER.info(f"正在发送{channel_name}通知")
         try:
             with httpx.Client(timeout=channel.timeout, follow_redirects=False) as client:
                 if channel.type == "bark":
-                    response = self._bark(client, channel, event)
+                    response = self._bark(client, channel, event, self.config.silent)
                 elif channel.type == "serverchan":
                     response = self._serverchan(client, channel, event)
                 elif channel.type == "telegram":
-                    response = self._telegram(client, channel, event)
+                    response = self._telegram(client, channel, event, self.config.silent)
                 elif channel.type == "wecom":
                     response = self._wecom(client, channel, event)
                 else:
-                    response = self._webhook(client, channel, event)
+                    response = self._webhook(client, channel, event, self.config.silent)
+            if response.is_success:
+                LOGGER.info(f"{channel_name}通知发送成功（HTTP {response.status_code}）")
+            else:
+                LOGGER.warning(f"{channel_name}通知发送失败（HTTP {response.status_code}）")
             return DeliveryResult(
                 channel.type,
                 response.is_success,
@@ -96,6 +111,7 @@ class NotifierHub:
                 None if response.is_success else "通知服务返回失败状态",
             )
         except Exception as exc:
+            LOGGER.warning(f"{channel_name}通知发送失败：{type(exc).__name__}")
             return DeliveryResult(channel.type, False, message=type(exc).__name__)
 
     @staticmethod
@@ -103,14 +119,18 @@ class NotifierHub:
         client: httpx.Client,
         channel: NotificationChannelConfig,
         event: NotificationEvent,
+        silent: bool = False,
     ) -> httpx.Response:
         if not channel.device_key_file:
             raise ValueError("Bark 缺少 device_key_file")
         server = str(channel.server or "https://api.day.app").rstrip("/")
         key = read_secret(channel.device_key_file)
+        payload = {"body": event.message, "group": "iCloudHarbor"}
+        if silent:
+            payload["level"] = "passive"
         return client.post(
             f"{server}/{quote(key, safe='')}/{quote(event.title, safe='')}",
-            json={"body": event.message, "group": "iCloudHarbor"},
+            json=payload,
         )
 
     @staticmethod
@@ -132,13 +152,18 @@ class NotifierHub:
         client: httpx.Client,
         channel: NotificationChannelConfig,
         event: NotificationEvent,
+        silent: bool = False,
     ) -> httpx.Response:
         if not channel.token_file or not channel.chat_id:
             raise ValueError("Telegram 缺少 token_file 或 chat_id")
         token = read_secret(channel.token_file)
         return client.post(
             f"https://api.telegram.org/bot{quote(token, safe='')}/sendMessage",
-            json={"chat_id": channel.chat_id, "text": f"{event.title}\n\n{event.message}"},
+            json={
+                "chat_id": channel.chat_id,
+                "text": f"{event.title}\n\n{event.message}",
+                "disable_notification": silent,
+            },
         )
 
     @staticmethod
@@ -237,6 +262,7 @@ class NotifierHub:
         client: httpx.Client,
         channel: NotificationChannelConfig,
         event: NotificationEvent,
+        silent: bool = False,
     ) -> httpx.Response:
         if not channel.url:
             raise ValueError("Webhook 缺少 url")
@@ -246,6 +272,7 @@ class NotifierHub:
             "message": event.message,
             "data": event.payload or {},
             "timestamp": int(time.time()),
+            "silent": silent,
         }
         headers: dict[str, str] = {}
         if channel.secret_file:

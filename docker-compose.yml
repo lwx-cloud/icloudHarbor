@@ -4,29 +4,14 @@ services:
     container_name: "${IH_CONTAINER_NAME:-icloudharbor}"
     restart: unless-stopped
 
+    # `.env` 保持精简；需要的可选参数直接按 CONFIGURATION.md 追加。
+    env_file:
+      - .env
+
     environment:
       - TZ=${IH_TIMEZONE:-UTC}
-      - IH_TIMEZONE=${IH_TIMEZONE:-UTC}
-      - IH_PUID=${IH_PUID:-1000}
-      - IH_PGID=${IH_PGID:-1000}
-      - IH_UMASK=${IH_UMASK:-0022}
       - IH_CONFIG_FILE=/config/config.yaml
-
-      # 首次启动必填；其他参数按需从 CONFIGURATION.md 添加。
-      - IH_APPLE_ID=${IH_APPLE_ID:-}
-      - IH_REGION=${IH_REGION:-}
-      - IH_DESTINATION=${IH_DESTINATION:-}
-      - IH_SYNC_INTERVAL=${IH_SYNC_INTERVAL:-}
-      - IH_RUN_ON_START=${IH_RUN_ON_START:-}
-
-      # 可选企业微信应用通知；启用时前四项必须同时填写。
-      - IH_WECOM_ID=${IH_WECOM_ID:-}
-      - IH_WECOM_SECRET=${IH_WECOM_SECRET:-}
-      - IH_WECOM_AGENT_ID=${IH_WECOM_AGENT_ID:-}
-      - IH_WECOM_TO_USER=${IH_WECOM_TO_USER:-}
-      - IH_WECOM_PROXY=${IH_WECOM_PROXY:-}
-      - IH_WECOM_CONTENT_SOURCE_URL=${IH_WECOM_CONTENT_SOURCE_URL:-}
-      - IH_WECOM_NAME=${IH_WECOM_NAME:-}
+      # 企业微信媒体 ID 使用与 icloudpd 一致的小写容器参数名。
       - media_id_download=${MEDIA_ID_DOWNLOAD:-}
       - media_id_startup=${MEDIA_ID_STARTUP:-}
       - media_id_warning=${MEDIA_ID_WARNING:-}

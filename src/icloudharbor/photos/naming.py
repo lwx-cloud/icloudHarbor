@@ -52,7 +52,7 @@ class PathNamer:
         context: dict[str, Any] = {
             "account": self.account.id,
             "library": asset.library_id,
-            "album": "",
+            "album": str(asset.metadata.get("album_name", "")),
             "asset_id": asset.asset_id,
             "asset_id_short": self.short_id(asset.asset_id),
             "created": asset.created_at,
@@ -61,6 +61,8 @@ class PathNamer:
             "stem": Path(original).stem,
             "extension": extension,
             "media_type": asset.media_type,
+            "resource_type": resource.resource_type,
+            "version": resource.version,
         }
         try:
             folder_raw = self.account.naming.folder_structure.format_map(context)

@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: cp .env.example .env
       - run: docker compose config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet
       - uses: docker/setup-qemu-action@v3
