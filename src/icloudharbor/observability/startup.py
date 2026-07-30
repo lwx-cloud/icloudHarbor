@@ -36,7 +36,7 @@ def startup_summary(
     configured_sizes: tuple[str, ...] = (
         tuple(str(size) for size in account.media.photo_size)
         if account.media.photo_size
-        else (str(account.media.photo_version),)
+        else ("original",)
     )
     photo_size = ",".join(configured_sizes)
     notifications = [channel.type for channel in config.notifications.channels if channel.enabled]
@@ -65,7 +65,7 @@ def startup_summary(
         f"同步计划：{_schedule(account)}；启动延迟={account.sync.download_delay} 分钟",
         f"图库：{','.join(account.libraries)}；包含相册：{album_scope}；排除相册：{exclusions}",
         (
-            f"媒体开关：照片={_switch(account.media.photos)}；视频={_switch(account.media.videos)}；"
+            f"媒体开关：视频={_switch(account.media.videos)}；"
             f"Live Photo={_switch(account.media.live_photos)}；RAW={account.media.raw.mode}"
         ),
         f"媒体尺寸：照片={photo_size}；Live Photo 尺寸={account.media.live_photo_size}",
@@ -108,7 +108,7 @@ def _schedule(account: AccountConfig) -> str:
 
 
 def _mode(value: int | None) -> str:
-    return f"{value:04o}" if value is not None else "由 UMASK 决定"
+    return f"{value:04o}" if value is not None else "默认（umask 0022）"
 
 
 def _switch(value: bool) -> str:

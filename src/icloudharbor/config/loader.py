@@ -7,11 +7,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import structlog
 import yaml  # type: ignore[import-untyped]
 
-from icloudharbor.config.models import AppConfig
+from icloudharbor.config.models import MOUNTED_MARKER, AppConfig
 
 DEFAULT_CONFIG_PATH = Path("/config/config.yaml")
+
+LOGGER = structlog.get_logger(__name__)
 
 Parser = Callable[[str], object]
 
@@ -68,7 +71,6 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_REGION", ("region",), _lower),
     ("IH_LIBRARIES", ("libraries",), _parse_csv),
     ("IH_DESTINATION", ("destination", "path"), _identity),
-    ("IH_MOUNTED_MARKER", ("destination", "mounted_marker"), _identity),
     ("IH_MINIMUM_FREE_SPACE", ("destination", "minimum_free_space"), _identity),
     ("IH_DIRECTORY_PERMISSIONS", ("destination", "directory_permissions"), _identity),
     ("IH_FILE_PERMISSIONS", ("destination", "file_permissions"), _identity),
@@ -77,10 +79,8 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
         ("destination", "synology_photos_app_fix"),
         _parse_bool,
     ),
-    ("IH_DOWNLOAD_PHOTOS", ("media", "photos"), _parse_bool),
     ("IH_DOWNLOAD_VIDEOS", ("media", "videos"), _parse_bool),
     ("IH_DOWNLOAD_LIVE_PHOTOS", ("media", "live_photos"), _parse_bool),
-    ("IH_PHOTO_VERSION", ("media", "photo_version"), _lower),
     ("IH_PHOTO_SIZE", ("media", "photo_size"), _parse_csv_lower),
     ("IH_LIVE_PHOTO_SIZE", ("media", "live_photo_size"), _lower),
     ("IH_RAW_MODE", ("media", "raw", "mode"), _lower),
@@ -98,17 +98,13 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_FOLDER_STRUCTURE", ("naming", "folder_structure"), _identity),
     ("IH_FILENAME_TEMPLATE", ("naming", "filename"), _identity),
     ("IH_CONFLICT_POLICY", ("naming", "conflict_policy"), _lower),
-    ("IH_KEEP_UNICODE", ("naming", "keep_unicode"), _parse_bool),
     ("IH_SYNC_STRATEGY", ("sync", "strategy"), _lower),
     ("IH_FULL_SCAN_INTERVAL", ("sync", "full_scan_interval"), _identity),
     ("IH_RUN_ON_START", ("sync", "run_on_start"), _parse_bool),
     ("IH_DOWNLOAD_DELAY", ("sync", "download_delay"), _parse_int),
     ("IH_DOWNLOAD_CONCURRENCY", ("download", "concurrency"), _parse_int),
-    ("IH_CHUNK_SIZE", ("download", "chunk_size"), _identity),
     ("IH_DOWNLOAD_TIMEOUT", ("download", "timeout"), _parse_int),
     ("IH_MAX_RETRIES", ("download", "max_retries"), _parse_int),
-    ("IH_VERIFY_HASH", ("download", "verify_hash"), _parse_bool),
-    ("IH_KEEP_PARTIAL", ("download", "keep_partial"), _parse_bool),
 )
 
 NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
@@ -116,12 +112,30 @@ NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_SILENT_NOTIFICATIONS", ("silent",), _parse_bool),
     ("IH_NOTIFY_STARTUP", ("startup",), _parse_bool),
     ("IH_NOTIFY_SUCCESS", ("success",), _parse_bool),
-    ("IH_NOTIFY_NO_CHANGES", ("no_changes",), _parse_bool),
     ("IH_NOTIFY_FAILURE", ("failure",), _parse_bool),
     ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
     ("notification_days", ("notification_days",), _parse_int),
     ("IH_NOTIFICATION_DAYS", ("notification_days",), _parse_int),
 )
+
+# Removed knobs that are now fixed behavior. They are ignored with a warning so
+# existing .env files keep starting instead of failing hard.
+IGNORED_ENV_REASONS: dict[str, str] = {
+    "IH_VERIFY_HASH": "SHA-256 校验已固定开启",
+    "IH_KEEP_PARTIAL": "断点续传已固定开启",
+    "IH_CHUNK_SIZE": "下载块大小已固定为 1MB",
+    "IH_MOUNTED_MARKER": f"挂载标记已固定为 {MOUNTED_MARKER}",
+    "IH_DOWNLOAD_PHOTOS": "照片下载已固定开启",
+    "IH_KEEP_UNICODE": "Unicode 文件名已固定保留",
+    "IH_UMASK": "权限掩码已固定为 0022；请用 IH_DIRECTORY_PERMISSIONS/IH_FILE_PERMISSIONS 控制权限",
+    "media_id_delete": "删除通知素材 ID 已不再使用",
+}
+
+# photo_version -> photo_size equivalents used by legacy migrations.
+_PHOTO_VERSION_SIZES: dict[str, list[str]] = {
+    "adjusted": ["adjusted"],
+    "both": ["original", "adjusted"],
+}
 
 WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
 
@@ -138,8 +152,65 @@ def load_config(path: Path | None = None) -> AppConfig:
     if not isinstance(raw, dict):
         raise ValueError("配置文件根节点必须是 YAML 对象")
     data: dict[str, Any] = raw
+    migrate_legacy_keys(data)
     apply_environment_overrides(data)
     return AppConfig.model_validate(data)
+
+
+def migrate_legacy_keys(data: dict[str, Any]) -> None:
+    """Fold removed YAML keys from pre-0.3 configs into their replacements.
+
+    Removed switches that now have fixed behavior are dropped with a warning;
+    `photo_version` is translated into the equivalent `photo_size` selection.
+    """
+
+    accounts = data.get("accounts")
+    if not isinstance(accounts, list):
+        accounts = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        media = account.get("media")
+        if isinstance(media, dict):
+            version = media.pop("photo_version", None)
+            if version is not None:
+                LOGGER.warning(
+                    f"配置项 media.photo_version 已并入 media.photo_size，已自动迁移：{version}"
+                )
+                if not media.get("photo_size"):
+                    sizes = list(_PHOTO_VERSION_SIZES.get(str(version).lower(), []))
+                    raw = media.get("raw")
+                    raw_mode = raw.get("mode") if isinstance(raw, dict) else None
+                    if raw_mode in {None, "raw_only", "both", "prefer_raw"}:
+                        if str(version).lower() == "original":
+                            sizes = ["original"]
+                        sizes.append("alternative")
+                    if sizes:
+                        media["photo_size"] = list(dict.fromkeys(sizes))
+            if media.pop("photos", None) is False:
+                LOGGER.warning("配置项 media.photos=false 已不再支持，照片将始终下载")
+        naming = account.get("naming")
+        if isinstance(naming, dict) and naming.pop("keep_unicode", None) is False:
+            LOGGER.warning("配置项 naming.keep_unicode=false 已不再支持，Unicode 文件名将始终保留")
+        destination = account.get("destination")
+        if isinstance(destination, dict):
+            marker = destination.pop("mounted_marker", None)
+            if marker is not None and marker != MOUNTED_MARKER:
+                LOGGER.warning(f"配置项 destination.mounted_marker 已固定为 {MOUNTED_MARKER}")
+        download = account.get("download")
+        if isinstance(download, dict):
+            if download.pop("verify_hash", None) is False:
+                LOGGER.warning("配置项 download.verify_hash=false 已不再支持，校验始终开启")
+            if download.pop("keep_partial", None) is False:
+                LOGGER.warning("配置项 download.keep_partial=false 已不再支持，断点续传始终开启")
+            if download.pop("chunk_size", None) is not None:
+                LOGGER.warning("配置项 download.chunk_size 已固定为 1MB")
+    notifications = data.get("notifications")
+    if isinstance(notifications, dict) and notifications.pop("no_changes", None) is False:
+        LOGGER.warning(
+            "配置项 notifications.no_changes 已并入 notifications.success；"
+            "现在每次成功同步都会通知，可设 success=false 关闭成功通知"
+        )
 
 
 def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
@@ -170,7 +241,6 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                 "libraries": ["root"],
                 "destination": {
                     "path": "/photos/personal",
-                    "mounted_marker": ".icloudharbor-mounted",
                     "minimum_free_space": "10GB",
                 },
                 "sync": {
@@ -192,6 +262,10 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
 def apply_environment_overrides(data: dict[str, Any]) -> None:
     """Apply non-secret Docker overrides on top of the YAML configuration."""
 
+    for name, reason in IGNORED_ENV_REASONS.items():
+        if _environment_value(name) is not None:
+            LOGGER.warning(f"环境变量 {name} 已废弃：{reason}；该设置将被忽略")
+
     runtime = _mapping(data, "runtime")
     _apply_mapping(runtime, RUNTIME_ENV_OVERRIDES)
 
@@ -199,10 +273,11 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
         name for name, _, _ in ACCOUNT_ENV_OVERRIDES if _environment_value(name) is not None
     }
     schedule = _environment_value("IH_SCHEDULE")
-    interval = _environment_value("IH_SYNC_INTERVAL")
-    if schedule is not None and interval is not None:
+    legacy_interval = _environment_value("IH_SYNC_INTERVAL")
+    if schedule is not None and legacy_interval is not None:
         raise ValueError("IH_SCHEDULE 和 IH_SYNC_INTERVAL 不能同时设置")
-    if schedule is not None or interval is not None:
+    legacy_version = _environment_value("IH_PHOTO_VERSION")
+    if schedule is not None or legacy_interval is not None or legacy_version is not None:
         account_names.add("IH_SCHEDULE")
 
     if account_names:
@@ -216,11 +291,23 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
         sync = _mapping(account, "sync")
         if schedule is not None:
             sync["schedule"] = schedule
-        elif interval is not None:
-            sync["schedule"] = {"interval": interval}
+        elif legacy_interval is not None:
+            LOGGER.warning("环境变量 IH_SYNC_INTERVAL 已并入 IH_SCHEDULE（直接填写 6h 等时长）")
+            sync["schedule"] = legacy_interval
+        if legacy_version is not None and _environment_value("IH_PHOTO_SIZE") is None:
+            LOGGER.warning("环境变量 IH_PHOTO_VERSION 已并入 IH_PHOTO_SIZE")
+            sizes = _PHOTO_VERSION_SIZES.get(legacy_version.lower())
+            if sizes:
+                media = _mapping(account, "media")
+                if not media.get("photo_size"):
+                    media["photo_size"] = sizes
 
     notifications = _mapping(data, "notifications")
     _apply_mapping(notifications, NOTIFICATION_ENV_OVERRIDES)
+    if _environment_value("IH_NOTIFY_NO_CHANGES") is not None:
+        LOGGER.warning(
+            "环境变量 IH_NOTIFY_NO_CHANGES 已并入 IH_NOTIFY_SUCCESS；现在每次成功同步都会通知"
+        )
     _apply_wecom_environment(notifications)
 
 
@@ -237,7 +324,6 @@ def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
         "media_id_startup": _environment_value("media_id_startup"),
         "media_id_warning": _environment_value("media_id_warning"),
         "media_id_expiration": _environment_value("media_id_expiration"),
-        "media_id_delete": _environment_value("media_id_delete"),
     }
     if not any(values.values()):
         return
@@ -268,7 +354,6 @@ def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
         "media_id_startup",
         "media_id_warning",
         "media_id_expiration",
-        "media_id_delete",
     ):
         if values[key] is not None:
             channel[key] = values[key]

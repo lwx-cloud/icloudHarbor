@@ -4,7 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 
-from icloudharbor.config.models import AppConfig
+from icloudharbor.config.models import MOUNTED_MARKER, AppConfig
 from icloudharbor.database.session import Database
 
 
@@ -41,7 +41,7 @@ class HealthService:
             key = f"destination:{account.id}"
             if not destination.is_dir():
                 checks[key] = "missing"
-            elif not (destination / account.destination.mounted_marker).is_file():
+            elif not (destination / MOUNTED_MARKER).is_file():
                 checks[key] = "marker_missing"
             elif not os.access(destination, os.W_OK):
                 checks[key] = "not_writable"

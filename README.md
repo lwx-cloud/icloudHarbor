@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.2.0`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 当前版本为 `0.3.0`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
 > 请保留其他可靠备份。
 
 ## 功能
@@ -159,12 +159,10 @@ touch /volume2/photos/iCloud/personal/.icloudharbor-mounted
 项目目录中的 `.env` 示例；第一项必填，其余项按群晖实际路径和用户添加：
 
 ```dotenv
-IH_CONTAINER_NAME=icloudharbor
 IH_CONFIG_PATH=/volume1/docker/icloudharbor-data
 IH_PHOTOS_PATH=/volume2/photos/iCloud
 IH_PUID=1026
 IH_PGID=100
-IH_UMASK=0022
 IH_TIMEZONE=Asia/Shanghai
 IH_APPLE_ID=your-account@example.com
 
@@ -197,10 +195,9 @@ docker exec -it icloudharbor icloudharbor session renew
 ```
 
 启用通知通道后，程序会读取 Apple 受信任 Session Cookie 的真实到期时间，默认从到期前
-7 天开始每天最多提醒一次。企业微信可使用与 icloudpd 相同的五个 `MEDIA_ID_*` 配置显示
-下载、启动、警告、认证临期和删除状态封面；本项目不会执行删除，因此删除封面不会触发。
-每次正式同步结束都会立即发送一次同步结果（包括无变化），前提是通知通道已启用；这不是
-额外的通知定时任务。
+7 天开始每天最多提醒一次。企业微信可使用与 icloudpd 相同的 `MEDIA_ID_*` 配置显示
+下载、启动、警告和认证临期封面。每次正式同步结束都会立即发送一次同步结果（包括无变化），
+前提是通知通道已启用；这不是额外的通知定时任务。
 
 该命令读取 `setup` 保存的本地凭据；Apple 要求双重认证时，只需再输入验证码。如果 Apple
 密码已经修改、凭据不存在或无法解密，请重新运行：

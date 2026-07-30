@@ -253,8 +253,6 @@ class NotifierHub:
             return channel.media_id_download
         if event_type == NotificationType.AUTH_EXPIRING:
             return channel.media_id_expiration
-        if event_type == NotificationType.DELETE_GUARD_TRIGGERED:
-            return channel.media_id_delete
         return channel.media_id_warning
 
     @staticmethod

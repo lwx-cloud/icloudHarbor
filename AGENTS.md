@@ -22,7 +22,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.2.0`，支持：
+当前版本为 `0.3.0`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
@@ -37,7 +37,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
-- 企业微信兼容 icloudpd 的五个媒体 ID，并按真实 Cookie 到期时间提前 7 天每日提醒一次。
+- 企业微信兼容 icloudpd 的四个媒体 ID，并按真实 Cookie 到期时间提前 7 天每日提醒一次。
 - 每次同步任务结束都发送结果通知，包括首次、手动、调度以及没有新文件的成功同步；通知
   没有独立定时器，认证临期只在同步时检查并单独按天去重。
 - 容器 INFO 日志输出脱敏启动摘要，每个文件只显示一次“正在下载”，并汇总结果和下次任务；
@@ -58,7 +58,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 容器启动时依次执行：
 
-1. `docker/entrypoint.sh` 校验 UID、GID 和 umask。
+1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
 2. 调整 `/config` 内运行目录的属主与权限。
 3. 如果 `/config/config.yaml` 不存在，执行 `icloudharbor config bootstrap`。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
@@ -95,8 +95,9 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 - `cli.py`：全部公开命令、交互认证和守护进程入口。
 - `application.py`：依赖装配中心，创建数据库、协议适配器、锁、健康检查和通知器。
-- `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束。
-- `config/loader.py`：YAML 加载、首次生成、`IH_*` 覆盖和原子写入。
+- `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束；固定行为
+  （挂载标记、下载块大小、校验、断点续传）为模块常量而非配置项。
+- `config/loader.py`：YAML 加载、首次生成、`IH_*` 覆盖、0.2→0.3 遗留参数自动迁移和原子写入。
 - `config/validation.py`：容量、时长等人类可读值解析。
 - `auth/manager.py`：认证状态与协议调用的协调。
 - `auth/session_store.py`：保存非敏感的认证状态元数据。
@@ -201,6 +202,9 @@ docker build .
 - 已验证真实日期范围样本能完成照片资源下载。
 - 2026-07-30 的 0.2.0 发布检查：103 项自动化测试全部通过，覆盖率 81%；包含多图库、
   相册、尺寸、HEIC 转换、权限、调度延迟和通知回归测试。
+- 2026-07-30 的 0.3.0 参数精简：删除 11 个伪参数、合并 4 组重叠参数（photo_version→
+  photo_size、interval→schedule、no_changes→success、umask→固定 0022），旧 `.env` 与
+  `config.yaml` 自动迁移或警告忽略；108 项测试、Ruff 与严格 mypy 全部通过。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。

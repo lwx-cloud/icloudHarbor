@@ -197,12 +197,6 @@ class HarborApplication:
     def _notify_sync(self, account: AccountConfig, result: SyncExecution) -> None:
         if result.status in {"DRY_RUN", "SKIPPED_ALREADY_RUNNING"}:
             return
-        if (
-            result.status == "COMPLETED"
-            and result.downloaded_count == 0
-            and not self.config.notifications.no_changes
-        ):
-            return
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED
             title = f"{self.config.notifications.title} 同步完成"

@@ -133,7 +133,7 @@ def test_dry_run_does_not_create_formal_or_partial_file(
 
 def test_missing_mount_marker_stops_before_remote_scan(app_config: AppConfig) -> None:
     account = app_config.accounts[0]
-    (account.destination.path / account.destination.mounted_marker).unlink()
+    (account.destination.path / ".icloudharbor-mounted").unlink()
     asset, content = make_asset()
     fake = FakeProtocol([asset], content)
     application = HarborApplication(app_config, protocol_factory=lambda _: fake)

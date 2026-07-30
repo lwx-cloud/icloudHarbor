@@ -3,7 +3,6 @@ set -eu
 
 IH_RUNTIME_UID="${IH_PUID:-1000}"
 IH_RUNTIME_GID="${IH_PGID:-1000}"
-IH_RUNTIME_UMASK="${IH_UMASK:-0022}"
 
 case "$IH_RUNTIME_UID:$IH_RUNTIME_GID" in
   *[!0-9:]*|:*|*:) echo "IH_PUID 和 IH_PGID 必须是正整数" >&2; exit 2 ;;
@@ -12,14 +11,7 @@ if [ "$IH_RUNTIME_UID" -lt 1 ] || [ "$IH_RUNTIME_GID" -lt 1 ]; then
   echo "IH_PUID 和 IH_PGID 必须是正整数" >&2
   exit 2
 fi
-case "$IH_RUNTIME_UMASK" in
-  *[!0-7]*|"") echo "IH_UMASK 必须是 0000 到 0777 的八进制权限掩码" >&2; exit 2 ;;
-esac
-if [ "$((0$IH_RUNTIME_UMASK))" -gt 511 ]; then
-  echo "IH_UMASK 必须是 0000 到 0777 的八进制权限掩码" >&2
-  exit 2
-fi
-umask "$IH_RUNTIME_UMASK"
+umask 0022
 
 groupmod --non-unique --gid "$IH_RUNTIME_GID" icloudharbor
 usermod --non-unique --uid "$IH_RUNTIME_UID" --gid "$IH_RUNTIME_GID" \

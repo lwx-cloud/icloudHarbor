@@ -17,6 +17,12 @@ from pydantic import (
 
 from icloudharbor.config.validation import parse_duration, parse_file_mode, parse_size
 
+MOUNTED_MARKER = ".icloudharbor-mounted"
+"""Fixed mount-guard marker name inside the download destination."""
+
+DOWNLOAD_CHUNK_SIZE = 1_000_000
+"""Fixed streaming chunk size (1MB) for downloads and checksum verification."""
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
@@ -32,7 +38,6 @@ class RuntimeConfig(StrictModel):
 
 class DestinationConfig(StrictModel):
     path: Path
-    mounted_marker: str = ".icloudharbor-mounted"
     minimum_free_space: int = 10_000_000_000
     directory_permissions: int | None = None
     file_permissions: int | None = None
@@ -44,13 +49,6 @@ class DestinationConfig(StrictModel):
         if not isinstance(value, str | int) or isinstance(value, bool):
             raise ValueError("minimum_free_space 必须是字节数或 10GB 形式")
         return parse_size(value)
-
-    @field_validator("mounted_marker")
-    @classmethod
-    def validate_marker(cls, value: str) -> str:
-        if not value or Path(value).name != value or value in {".", ".."}:
-            raise ValueError("mounted_marker 必须是单个安全文件名")
-        return value
 
     @field_validator("directory_permissions", "file_permissions", mode="before")
     @classmethod
@@ -67,10 +65,8 @@ class RawConfig(StrictModel):
 
 
 class MediaConfig(StrictModel):
-    photos: bool = True
     videos: bool = True
     live_photos: bool = True
-    photo_version: Literal["original", "adjusted", "both"] = "original"
     photo_size: list[Literal["original", "medium", "thumb", "adjusted", "alternative"]] | None = (
         None
     )
@@ -119,7 +115,6 @@ class NamingConfig(StrictModel):
     conflict_policy: Literal["suffix_asset_id", "always_asset_id", "timestamp", "error"] = (
         "suffix_asset_id"
     )
-    keep_unicode: bool = True
 
     @field_validator("folder_structure")
     @classmethod
@@ -167,31 +162,21 @@ class SyncConfig(StrictModel):
 
     @field_validator("schedule")
     @classmethod
-    def validate_cron_string(
+    def validate_schedule_string(
         cls, value: str | ScheduleConfig | None
     ) -> str | ScheduleConfig | None:
-        if isinstance(value, str) and len(value.split()) != 5:
-            raise ValueError("Cron 表达式必须包含 5 个字段")
+        if isinstance(value, str):
+            if len(value.split()) == 5:
+                return value
+            parse_duration(value)
+            return ScheduleConfig(interval=value)
         return value
 
 
 class DownloadConfig(StrictModel):
     concurrency: Annotated[int, Field(ge=1, le=8)] = 2
-    chunk_size: int = 1_000_000
     timeout: Annotated[int, Field(ge=1, le=3600)] = 300
     max_retries: Annotated[int, Field(ge=0, le=20)] = 5
-    verify_hash: bool = True
-    keep_partial: bool = True
-
-    @field_validator("chunk_size", mode="before")
-    @classmethod
-    def validate_chunk_size(cls, value: object) -> int:
-        if not isinstance(value, str | int) or isinstance(value, bool):
-            raise ValueError("chunk_size 必须是字节数或 1MB 形式")
-        parsed = parse_size(value)
-        if parsed < 64 * 1024 or parsed > 64 * 1024 * 1024:
-            raise ValueError("chunk_size 必须在 64KiB 到 64MiB 之间")
-        return parsed
 
 
 class AccountConfig(StrictModel):
@@ -244,7 +229,6 @@ class NotificationChannelConfig(StrictModel):
     media_id_startup: str | None = None
     media_id_warning: str | None = None
     media_id_expiration: str | None = None
-    media_id_delete: str | None = None
     secret_file: Path | None = None
     timeout: Annotated[int, Field(ge=1, le=60)] = 10
 
@@ -272,7 +256,6 @@ class NotificationsConfig(StrictModel):
     silent: bool = False
     startup: bool = False
     success: bool = True
-    no_changes: bool = True
     failure: bool = True
     auth_required: bool = True
     notification_days: Annotated[int, Field(ge=1, le=30)] = 7

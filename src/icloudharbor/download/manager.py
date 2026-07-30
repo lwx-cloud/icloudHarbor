@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from icloudharbor.config.models import AccountConfig
+from icloudharbor.config.models import DOWNLOAD_CHUNK_SIZE, AccountConfig
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.download.postprocess import MediaPostProcessor
 from icloudharbor.download.retry import retry_delay
@@ -150,11 +150,7 @@ class DownloadManager:
             raise HarborError("下载路径越过目标目录", ErrorCode.FILE_PERMISSION_ERROR)
         self.postprocessor.prepare_parent(target.parent)
         partial = target.with_name(f"{target.name}.part")
-        offset = (
-            partial.stat().st_size if partial.exists() and self.account.download.keep_partial else 0
-        )
-        if partial.exists() and not self.account.download.keep_partial:
-            partial.unlink()
+        offset = partial.stat().st_size if partial.exists() else 0
 
         stream = self.protocol.open_resource(task.resource, offset=offset)
         if offset and not (stream.supports_range or stream.status_code == 206):
@@ -168,7 +164,7 @@ class DownloadManager:
         mode = "ab" if offset else "wb"
         try:
             with stream, partial.open(mode) as output:
-                for chunk in stream.iter_chunks(self.account.download.chunk_size):
+                for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
                     if chunk:
                         output.write(chunk)
                 output.flush()
@@ -177,7 +173,7 @@ class DownloadManager:
                 partial,
                 expected_size=task.resource.size,
                 expected_checksum=task.resource.checksum,
-                chunk_size=self.account.download.chunk_size,
+                chunk_size=DOWNLOAD_CHUNK_SIZE,
             )
         except Exception:
             if (

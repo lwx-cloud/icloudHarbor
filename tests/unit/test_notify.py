@@ -86,7 +86,7 @@ def test_wecom_uses_textcard_when_source_url_is_configured(tmp_path: Path) -> No
         (NotificationType.APP_STARTED, "media_id_startup"),
         (NotificationType.SYNC_FAILED, "media_id_warning"),
         (NotificationType.AUTH_EXPIRING, "media_id_expiration"),
-        (NotificationType.DELETE_GUARD_TRIGGERED, "media_id_delete"),
+        (NotificationType.DELETE_GUARD_TRIGGERED, "media_id_warning"),
     ],
 )
 def test_wecom_uses_matching_media_id_for_mpnews(

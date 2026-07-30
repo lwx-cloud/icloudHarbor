@@ -7,7 +7,12 @@ import yaml
 from pydantic import ValidationError
 
 from icloudharbor.config.loader import bootstrap_config, config_snapshot, load_config
-from icloudharbor.config.models import AccountConfig, AppConfig, NotificationChannelConfig
+from icloudharbor.config.models import (
+    AccountConfig,
+    AppConfig,
+    NotificationChannelConfig,
+    ScheduleConfig,
+)
 from icloudharbor.config.validation import parse_duration, parse_file_mode, parse_size
 
 
@@ -119,12 +124,12 @@ def test_environment_override_supports_common_docker_parameters(
     monkeypatch.setenv("IH_RECENT_ONLY", "500")
     monkeypatch.setenv("IH_UNTIL_FOUND", "20")
     monkeypatch.setenv("IH_FOLDER_STRUCTURE", "{created:%Y/%m}")
-    monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
+    monkeypatch.setenv("IH_SCHEDULE", "12h")
     monkeypatch.setenv("IH_DOWNLOAD_DELAY", "15")
     monkeypatch.setenv("IH_DOWNLOAD_CONCURRENCY", "4")
     monkeypatch.setenv("IH_NOTIFICATION_TITLE", "家庭 iCloud")
     monkeypatch.setenv("IH_SILENT_NOTIFICATIONS", "true")
-    monkeypatch.setenv("IH_NOTIFY_NO_CHANGES", "yes")
+    monkeypatch.setenv("IH_NOTIFY_FAILURE", "yes")
     config = load_config(path)
 
     assert config.runtime.log_level == "DEBUG"
@@ -147,12 +152,12 @@ def test_environment_override_supports_common_docker_parameters(
     assert config.accounts[0].filters.recent_only == 500
     assert config.accounts[0].filters.until_found == 20
     assert config.accounts[0].naming.folder_structure == "{created:%Y/%m}"
-    assert config.accounts[0].sync.schedule
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
     assert config.accounts[0].sync.download_delay == 15
     assert config.accounts[0].download.concurrency == 4
     assert config.notifications.title == "家庭 iCloud"
     assert config.notifications.silent is True
-    assert config.notifications.no_changes is True
+    assert config.notifications.failure is True
 
 
 def test_environment_override_rejects_ambiguous_schedule(
@@ -202,7 +207,6 @@ def test_environment_override_builds_wecom_channel_without_persisting_secret(
     monkeypatch.setenv("media_id_startup", "startup-media")
     monkeypatch.setenv("media_id_warning", "warning-media")
     monkeypatch.setenv("media_id_expiration", "expiration-media")
-    monkeypatch.setenv("media_id_delete", "delete-media")
     monkeypatch.setenv("IH_NOTIFICATION_DAYS", "5")
 
     config = load_config(path)
@@ -217,7 +221,6 @@ def test_environment_override_builds_wecom_channel_without_persisting_secret(
     assert channel.media_id_startup == "startup-media"
     assert channel.media_id_warning == "warning-media"
     assert channel.media_id_expiration == "expiration-media"
-    assert channel.media_id_delete == "delete-media"
     assert config.notifications.notification_days == 5
     assert "must-not-enter-config" not in config_snapshot(config)
 
@@ -311,3 +314,138 @@ def test_bootstrap_config_requires_apple_id(
 
     with pytest.raises(ValueError, match="IH_APPLE_ID"):
         bootstrap_config(tmp_path / "config.yaml")
+
+
+def _write_legacy_yaml(path: Path, account_config: AccountConfig) -> None:
+    payload = account_config.model_dump(mode="json")
+    payload["media"] = {
+        "photos": True,
+        "photo_version": "both",
+        "raw": {"mode": "both"},
+    }
+    payload["naming"]["keep_unicode"] = True
+    payload["destination"]["mounted_marker"] = ".icloudharbor-mounted"
+    payload["download"] = {
+        "concurrency": 2,
+        "timeout": 300,
+        "max_retries": 5,
+        "verify_hash": True,
+        "keep_partial": True,
+        "chunk_size": "1MB",
+    }
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "accounts": [payload],
+                "notifications": {"success": True, "no_changes": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_legacy_yaml_keys_are_migrated_and_dropped(
+    tmp_path: Path,
+    account_config: AccountConfig,
+) -> None:
+    path = tmp_path / "config.yaml"
+    _write_legacy_yaml(path, account_config)
+
+    config = load_config(path)
+
+    # photo_version=both + raw.mode=both 迁移为等价的 photo_size 选择
+    assert config.accounts[0].media.photo_size == ["original", "adjusted", "alternative"]
+    # 生成的新配置不再包含任何遗留键
+    snapshot_data = yaml.safe_load(config_snapshot(config))
+    account = snapshot_data["accounts"][0]
+    assert "photo_version" not in account["media"]
+    assert "photos" not in account["media"]
+    assert "keep_unicode" not in account["naming"]
+    assert "mounted_marker" not in account["destination"]
+    assert "verify_hash" not in account["download"]
+    assert "keep_partial" not in account["download"]
+    assert "chunk_size" not in account["download"]
+    assert "no_changes" not in snapshot_data["notifications"]
+
+
+def test_legacy_photo_version_original_keeps_default_sizes(
+    tmp_path: Path,
+    account_config: AccountConfig,
+) -> None:
+    path = tmp_path / "config.yaml"
+    payload = account_config.model_dump(mode="json")
+    payload["media"] = {"photo_version": "original"}
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [payload]}),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.accounts[0].media.photo_size == ["original", "alternative"]
+
+
+def test_legacy_environment_variables_still_work(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
+    monkeypatch.setenv("IH_PHOTO_VERSION", "both")
+
+    config = load_config(path)
+
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
+    assert config.accounts[0].media.photo_size == ["original", "adjusted"]
+
+
+def test_removed_environment_variables_are_ignored_not_fatal(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    for name in (
+        "IH_VERIFY_HASH",
+        "IH_KEEP_PARTIAL",
+        "IH_CHUNK_SIZE",
+        "IH_MOUNTED_MARKER",
+        "IH_DOWNLOAD_PHOTOS",
+        "IH_KEEP_UNICODE",
+        "IH_UMASK",
+        "IH_NOTIFY_NO_CHANGES",
+        "media_id_delete",
+    ):
+        monkeypatch.setenv(name, "false")
+
+    config = load_config(path)
+
+    # 被忽略的旧变量不影响加载 (ignored env vars stay non-fatal)
+    assert config.accounts[0].download.concurrency == 1
+
+
+def test_schedule_string_accepts_duration_form(
+    tmp_path: Path,
+    account_config: AccountConfig,
+) -> None:
+    path = tmp_path / "config.yaml"
+    payload = account_config.model_dump(mode="json")
+    payload["sync"]["schedule"] = "6h"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [payload]}),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="6h")

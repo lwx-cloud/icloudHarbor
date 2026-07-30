@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import structlog
 
-from icloudharbor.config.models import AccountConfig
+from icloudharbor.config.models import MOUNTED_MARKER, AccountConfig
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.database.session import Database
 from icloudharbor.download.manager import DownloadManager
@@ -414,7 +414,7 @@ class PhotosEngine:
                 f"下载目录不存在：{destination}",
                 ErrorCode.MOUNT_MISSING,
             )
-        marker = destination / account.destination.mounted_marker
+        marker = destination / MOUNTED_MARKER
         if not marker.is_file():
             raise HarborError(
                 f"挂载标记不存在：{marker}",

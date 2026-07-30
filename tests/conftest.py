@@ -128,7 +128,6 @@ def account_config(tmp_path: Path) -> AccountConfig:
         sync=SyncConfig(full_scan_interval="30d"),
         download=DownloadConfig(
             concurrency=1,
-            chunk_size="64KiB",
             timeout=10,
             max_retries=0,
         ),

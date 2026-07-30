@@ -16,7 +16,6 @@ services:
       - media_id_startup=${MEDIA_ID_STARTUP:-}
       - media_id_warning=${MEDIA_ID_WARNING:-}
       - media_id_expiration=${MEDIA_ID_EXPIRATION:-}
-      - media_id_delete=${MEDIA_ID_DELETE:-}
 
     volumes:
       - "${IH_CONFIG_PATH:-./data/config}:/config"

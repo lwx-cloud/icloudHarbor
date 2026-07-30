@@ -20,15 +20,14 @@ def asset_allowed(asset: RemoteAsset, account: AccountConfig) -> bool:
         return False
     if filters.created_before and asset.created_at > filters.created_before:
         return False
-    if asset.media_type == "photo" and not account.media.photos:
-        return False
     return not (asset.media_type == "video" and not account.media.videos)
 
 
 def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[RemoteResource, ...]:
     selected: list[RemoteResource] = []
     media = account.media
-    requested_sizes = set(media.photo_size or ())
+    explicit_sizes = media.photo_size is not None
+    requested_sizes = set(media.photo_size or ("original",))
     is_live_photo = bool(asset.metadata.get("is_live_photo"))
     known_types = {
         "live_photo_image",
@@ -54,58 +53,35 @@ def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[Remote
             if media.live_photos and _resource_size(resource) == media.live_photo_size:
                 selected.append(resource)
             continue
-        if requested_sizes:
-            if resource_type == "raw_original":
-                if "alternative" in requested_sizes and media.raw.mode != "jpeg_only":
-                    selected.append(resource)
-                continue
-            if resource_type == "jpeg_alternative":
-                if "alternative" in requested_sizes and media.raw.mode != "raw_only":
-                    selected.append(resource)
-                continue
-            size_by_type = {
-                "photo_original": "original",
-                "photo_medium": "medium",
-                "photo_thumbnail": "thumb",
-                "photo_adjusted": "adjusted",
-                "video_original": "original",
-                "video_medium": "medium",
-                "video_thumbnail": "thumb",
-                "video_adjusted": "adjusted",
-            }
-            if size_by_type.get(resource_type) in requested_sizes and (
-                (resource_type.startswith("photo_") and media.photos)
-                or (resource_type.startswith("video_") and media.videos)
-            ):
-                selected.append(resource)
-            continue
-        if resource_type.startswith("video_"):
-            if media.videos and (
-                resource_type == "video_original"
-                or (
-                    media.photo_version in {"adjusted", "both"}
-                    and resource_type == "video_adjusted"
-                )
-            ):
-                selected.append(resource)
-            continue
+        # RAW/JPEG companions follow raw.mode; an explicit photo_size list must
+        # also contain "alternative" to include them.
         if resource_type == "raw_original":
-            if media.raw.mode in {"raw_only", "both", "prefer_raw"}:
+            if media.raw.mode in {"raw_only", "both", "prefer_raw"} and (
+                not explicit_sizes or "alternative" in requested_sizes
+            ):
                 selected.append(resource)
             continue
         if resource_type == "jpeg_alternative":
-            if media.raw.mode in {"jpeg_only", "both", "prefer_jpeg"}:
+            if media.raw.mode in {"jpeg_only", "both", "prefer_jpeg"} and (
+                not explicit_sizes or "alternative" in requested_sizes
+            ):
                 selected.append(resource)
             continue
-        if resource_type == "photo_original" and media.photo_version in {"original", "both"}:
-            if media.photos and media.raw.mode != "raw_only":
-                selected.append(resource)
+        if resource_type == "photo_original" and media.raw.mode == "raw_only":
             continue
-        if (
-            resource_type == "photo_adjusted"
-            and media.photo_version in {"adjusted", "both"}
-            and media.photos
-        ):
+        if resource_type.startswith("video_") and not media.videos:
+            continue
+        size_by_type = {
+            "photo_original": "original",
+            "photo_medium": "medium",
+            "photo_thumbnail": "thumb",
+            "photo_adjusted": "adjusted",
+            "video_original": "original",
+            "video_medium": "medium",
+            "video_thumbnail": "thumb",
+            "video_adjusted": "adjusted",
+        }
+        if size_by_type.get(resource_type) in requested_sizes:
             selected.append(resource)
 
     # If a third-party adapter only offered an unknown generic original

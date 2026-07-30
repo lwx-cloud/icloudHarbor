@@ -67,7 +67,7 @@ class AssetPlanner:
                 if state:
                     relative = Path(state.relative_path)
                     task = DownloadTask(asset, resource, relative)
-                    if self._is_complete(destination / relative, state, resource, account):
+                    if self._is_complete(destination / relative, state, resource):
                         plan.skips.append(task)
                         reserved.add(relative)
                         continue
@@ -91,7 +91,6 @@ class AssetPlanner:
         path: Path,
         state: LocalFileState,
         resource: RemoteResource,
-        account: AccountConfig,
     ) -> bool:
         if state.status != "VERIFIED" or not path.is_file():
             return False
@@ -101,7 +100,7 @@ class AssetPlanner:
         if resource.size is not None and actual_size != resource.size:
             return False
         expected_hash = state.sha256
-        if account.download.verify_hash and expected_hash:
+        if expected_hash:
             return file_sha256(path) == expected_hash
         return True
 
