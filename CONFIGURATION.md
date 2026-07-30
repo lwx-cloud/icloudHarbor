@@ -31,7 +31,7 @@
 | `IH_ACCOUNT_NAME` | `我的 iCloud` | 任意非空文本 | 日志和通知中显示的名称。 |
 | `IH_REGION` | `auto` | `auto`、`global`、`china` | 中国大陆账号建议 `china`；`auto` 复用 Session 区域。 |
 | `IH_LIBRARIES` | `root` | 逗号分隔的图库 ID/名称 | 下载一个或多个可访问图库；用 `libraries list` 查准确值。 |
-| `IH_DESTINATION` | `/photos/personal` | 容器内绝对路径 | 下载目标；不要写 `/volume1/...` 宿主机路径。 |
+| `IH_DESTINATION` | `/photos` | 容器内绝对路径 | 下载目标；不要写 `/volume1/...` 宿主机路径。 |
 | `IH_MINIMUM_FREE_SPACE` | `10GB` | 字节数或 `10GB`、`2GiB` | 下载后必须保留的最小可用空间。 |
 | `IH_DIRECTORY_PERMISSIONS` | 空（默认 `755`） | `750`、`0750`、`0o750` | 非空时强制设置下载目录权限。 |
 | `IH_FILE_PERMISSIONS` | 空（默认 `644`） | `640`、`0640`、`0o640` | 非空时强制设置下载文件和生成 JPEG 的权限。 |
@@ -110,8 +110,8 @@
 **1. 准备目录和挂载标记**（安全开关：没有它就拒绝下载，防止照片卷未挂载时写爆容器层）：
 
 ```bash
-mkdir -p ./data/photos/personal
-touch ./data/photos/personal/.icloudharbor-mounted
+mkdir -p ./data/photos
+touch ./data/photos/.icloudharbor-mounted
 ```
 
 **2. 填写 `.env`**，最少只需一行：
@@ -140,7 +140,7 @@ docker compose exec icloudharbor icloudharbor setup
 | --- | --- | --- |
 | 配置、数据库、Session、凭据 | `./data/config` | `/config` |
 | 照片根目录 | `./data/photos` | `/photos` |
-| 当前账号下载目录 | `./data/photos/personal` | `/photos/personal` |
+| 当前账号下载目录 | `./data/photos` | `/photos` |
 
 ---
 
@@ -164,7 +164,7 @@ touch /volume2/photos/iCloud/personal/.icloudharbor-mounted
 chown -R 99:100 /volume1/docker/icloudharbor /volume2/photos/iCloud/personal
 ```
 
-注意：`IH_DESTINATION` 是**容器内**路径（`/photos/personal`），不要写 `/volume2/...` 宿主机路径。
+注意：`IH_DESTINATION` 是**容器内**路径（`/photos`），不要写 `/volume2/...` 宿主机路径。
 
 ### 场景 2：改同步频率
 
@@ -258,7 +258,7 @@ accounts:
       - root
 
     destination:
-      path: /photos/personal
+      path: /photos
       minimum_free_space: 10GB
       directory_permissions: null
       file_permissions: null

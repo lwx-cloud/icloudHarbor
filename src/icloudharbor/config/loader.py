@@ -235,7 +235,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                 "enabled": True,
                 "libraries": ["root"],
                 "destination": {
-                    "path": "/photos/personal",
+                    "path": "/photos",
                     "minimum_free_space": "10GB",
                 },
                 "sync": {

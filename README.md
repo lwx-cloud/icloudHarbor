@@ -62,8 +62,8 @@ cp .env.example .env
 创建默认目录和挂载标记：
 
 ```bash
-mkdir -p ./data/config ./data/photos/personal
-touch ./data/photos/personal/.icloudharbor-mounted
+mkdir -p ./data/config ./data/photos
+touch ./data/photos/.icloudharbor-mounted
 ```
 
 查看运行用户的数字 UID/GID：
@@ -177,8 +177,7 @@ IH_WECOM_TO_USER=@all
 ```
 
 `1026:100` 只是示例。请在群晖终端运行 `id <用户名>`，填写实际数字 UID/GID，并确保它能
-写入上面两个目录。容器内默认下载目标是 `/photos/personal`，对应宿主机
-`/volume2/photos/iCloud/personal`。
+写入上面两个目录。容器内默认下载目标是 `/photos`，对应宿主机 `IH_PHOTOS_PATH`。
 
 ## Session 与密码
 
@@ -292,7 +291,7 @@ docker compose logs --tail=100 icloudharbor
 在实际下载目标中创建标记文件。默认目标为宿主机照片卷下的 `personal`：
 
 ```bash
-touch ./data/photos/personal/.icloudharbor-mounted
+touch ./data/photos/.icloudharbor-mounted
 ```
 
 不要通过修改配置绕过挂载保护。
