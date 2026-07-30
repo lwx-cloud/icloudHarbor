@@ -43,7 +43,7 @@
 | `IH_RAW_MODE` | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | RAW/JPEG 伴随资源策略。 |
 | `IH_CONVERT_HEIC_TO_JPEG` | `false` | `true`、`false` | 保留 HEIC 原片并额外生成 JPEG；永不覆盖已有 JPEG。 |
 | `IH_JPEG_PATH` | 空（与 HEIC 同目录） | 容器内路径 | JPEG 单独输出目录；设到 `/photos` 外需额外挂载持久化卷。 |
-| `IH_JPEG_QUALITY` | `90` | `0`–`100` | 生成 JPEG 的质量。 |
+| `IH_JPEG_QUALITY` | `100` | `0`–`100` | 生成 JPEG 的质量。 |
 | `IH_ALBUMS` | 空（全部） | 逗号分隔的相册 ID/名称 | 只扫描指定相册；用 `albums list` 查准确值。 |
 | `IH_EXCLUDE_ALBUMS` | 空 | 逗号分隔的相册 ID/名称 | 排除指定相册；不能与包含列表重复。 |
 | `IH_CREATED_AFTER` | 空 | 带时区的 ISO 8601 时间 | 只下载不早于此时间的项目。 |
@@ -90,6 +90,8 @@
 - 相册、`recent_only`、`until_found` 扫描不会推进完整图库游标——以后移除这些限制时会安全地重新全量扫描，不会漏掉旧项目。
 
 **0.3.0 删除的参数**：`IH_PHOTO_VERSION`（并入 `IH_PHOTO_SIZE`）、`IH_SYNC_INTERVAL`（并入 `IH_SCHEDULE`）、`IH_VERIFY_HASH`、`IH_KEEP_PARTIAL`、`IH_CHUNK_SIZE`、`IH_MOUNTED_MARKER`、`IH_DOWNLOAD_PHOTOS`、`IH_KEEP_UNICODE`、`IH_UMASK`、`IH_NOTIFY_NO_CHANGES`（并入 `IH_NOTIFY_SUCCESS`）、`MEDIA_ID_DELETE`。旧 `.env`/`config.yaml` 里的这些设置会在启动时自动迁移或忽略并给出警告，不会导致启动失败。
+
+**0.3.1 变更**：`IH_JPEG_QUALITY` 默认值从 90 改为 100；磁盘已有文件若大小与远端匹配则自动认领到数据库，避免从 icloudpd 等工具迁移时重复下载；启动日志精简为只显示已启用功能。
 
 ### 仅 `config.yaml` 可用的参数
 
@@ -196,7 +198,7 @@ IH_EXCLUDE_ALBUMS=屏幕快照
 
 ```dotenv
 IH_CONVERT_HEIC_TO_JPEG=true
-IH_JPEG_QUALITY=90
+IH_JPEG_QUALITY=100
 ```
 
 原片保留，JPEG 与 HEIC 同目录生成；同名已存在时自动使用 `_from_HEIC.JPG` 后缀，绝不覆盖。
@@ -271,7 +273,7 @@ accounts:
         mode: both
       convert_heic_to_jpeg: false
       jpeg_path: null
-      jpeg_quality: 90
+      jpeg_quality: 100
 
     filters:
       albums: []
