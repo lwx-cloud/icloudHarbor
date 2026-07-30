@@ -29,6 +29,8 @@ def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[Remote
     explicit_sizes = media.photo_size is not None
     requested_sizes = set(media.photo_size or ("original",))
     is_live_photo = bool(asset.metadata.get("is_live_photo"))
+    # 记录已选中 Live Photo 版本, 同版本泛型资源不再重复选取
+    live_photo_versions: set[str] = set()
     known_types = {
         "live_photo_image",
         "live_photo_video",
@@ -47,11 +49,20 @@ def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[Remote
 
     for resource in asset.resources:
         resource_type = resource.resource_type
-        if resource_type in {"live_photo_image", "live_photo_video"} or (
-            is_live_photo and resource_type.startswith(("photo_", "video_"))
-        ):
+        if resource_type in {"live_photo_image", "live_photo_video"}:
             if media.live_photos and _resource_size(resource) == media.live_photo_size:
                 selected.append(resource)
+                live_photo_versions.add(resource.version)
+            continue
+        # 泛型 photo_*/video_*: 同版本已有 live_photo 资源则跳过
+        if (
+            is_live_photo
+            and resource_type.startswith(("photo_", "video_"))
+            and media.live_photos
+            and _resource_size(resource) == media.live_photo_size
+            and resource.version not in live_photo_versions
+        ):
+            selected.append(resource)
             continue
         # RAW/JPEG companions follow raw.mode; an explicit photo_size list must
         # also contain "alternative" to include them.
