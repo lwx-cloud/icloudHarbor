@@ -355,7 +355,7 @@ def test_legacy_yaml_keys_are_migrated_and_dropped(
     config = load_config(path)
 
     # photo_version=both + raw.mode=both 迁移为等价的 photo_size 选择
-    assert config.accounts[0].media.photo_size == ["original", "adjusted", "alternative"]
+    assert config.accounts[0].media.photo_size == ["original", "adjusted"]
     # 生成的新配置不再包含任何遗留键
     snapshot_data = yaml.safe_load(config_snapshot(config))
     account = snapshot_data["accounts"][0]
@@ -383,7 +383,7 @@ def test_legacy_photo_version_original_keeps_default_sizes(
 
     config = load_config(path)
 
-    assert config.accounts[0].media.photo_size == ["original", "alternative"]
+    assert config.accounts[0].media.photo_size == ["original"]
 
 
 def test_legacy_environment_variables_still_work(

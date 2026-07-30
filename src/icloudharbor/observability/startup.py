@@ -48,41 +48,71 @@ def startup_summary(
     )
     jpeg_path = display_host_path(account.media.jpeg_path or account.destination.path)
 
-    return [
+    lines = [
         f"iCloudHarbor 版本：{__version__}",
         f"运行环境：{platform.system()} {platform.release()} / Python {platform.python_version()}",
         f"配置文件：{config_path}",
         f"Apple Account：{apple_id}",
-        "认证方式：自动识别 Apple MFA/Web 会话",
         f"Session 目录：{config_root / 'sessions' / account.id}",
         f"运行身份：UID={_uid()}，GID={_gid()}",
         f"iCloud 区域：{region}",
-        f"认证临期提醒：提前 {config.notifications.notification_days} 天",
         f"下载目录：{destination}",
         f"目录结构：{account.naming.folder_structure}",
         f"文件名规则：{account.naming.filename}",
-        f"文件权限：目录={directory_mode}，文件={file_mode}",
-        f"同步计划：{_schedule(account)}；启动延迟={account.sync.download_delay} 分钟",
-        f"图库：{','.join(account.libraries)}；包含相册：{album_scope}；排除相册：{exclusions}",
-        (
-            f"媒体开关：视频={_switch(account.media.videos)}；"
-            f"Live Photo={_switch(account.media.live_photos)}；RAW={account.media.raw.mode}"
-        ),
-        f"媒体尺寸：照片={photo_size}；Live Photo 尺寸={account.media.live_photo_size}",
-        (
-            f"HEIC 转 JPEG：{'启用' if account.media.convert_heic_to_jpeg else '关闭'}"
-            f"；目录={jpeg_path}；质量={account.media.jpeg_quality}"
-        ),
-        (
-            f"最近项目：{account.filters.recent_only or '全部'}；"
-            f"连续已有停止：{account.filters.until_found or '关闭'}"
-        ),
-        (f"Synology Photos 索引兼容：{_switch(account.destination.synology_photos_app_fix)}"),
-        (
-            f"通知：{','.join(notifications) if notifications else '关闭'}；"
-            f"标题={config.notifications.title}；静默={_switch(config.notifications.silent)}"
-        ),
+        f"同步计划：{_schedule(account)}",
+        f"图库：{','.join(account.libraries)}",
     ]
+
+    if account.filters.albums:
+        lines.append(f"包含相册：{album_scope}")
+    if account.filters.exclude_albums:
+        lines.append(f"排除相册：{exclusions}")
+
+    media_parts: list[str] = []
+    if not account.media.videos:
+        media_parts.append("视频=关闭")
+    if not account.media.live_photos:
+        media_parts.append("Live Photo=关闭")
+    if account.media.raw.mode != "both":
+        media_parts.append(f"RAW={account.media.raw.mode}")
+    if media_parts:
+        lines.append(f"媒体覆盖：{'; '.join(media_parts)}")
+
+    lines.append(f"媒体尺寸：照片={photo_size}；Live Photo 尺寸={account.media.live_photo_size}")
+
+    if account.media.convert_heic_to_jpeg:
+        lines.append(f"HEIC 转 JPEG：启用；目录={jpeg_path}；质量={account.media.jpeg_quality}")
+
+    if (
+        account.destination.directory_permissions is not None
+        or account.destination.file_permissions is not None
+    ):
+        lines.append(f"文件权限：目录={directory_mode}，文件={file_mode}")
+
+    if account.filters.recent_only:
+        lines.append(f"最近项目：{account.filters.recent_only}")
+    if account.filters.until_found:
+        lines.append(f"连续已有停止：{account.filters.until_found}")
+    if account.filters.favorites_only:
+        lines.append("收藏：仅下载收藏")
+    if account.filters.include_hidden:
+        lines.append("已隐藏：包含")
+
+    if account.sync.download_delay > 0:
+        lines.append(f"启动延迟：{account.sync.download_delay} 分钟")
+
+    if account.destination.synology_photos_app_fix:
+        lines.append("Synology Photos 索引兼容：启用")
+
+    if notifications:
+        lines.append(f"通知：{','.join(notifications)}；标题={config.notifications.title}")
+    else:
+        lines.append("通知：关闭")
+
+    if config.notifications.notification_days != 7:
+        lines.append(f"认证临期提醒：提前 {config.notifications.notification_days} 天")
+
+    return lines
 
 
 def log_startup_summary(

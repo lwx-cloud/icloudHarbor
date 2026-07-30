@@ -133,6 +133,7 @@ IGNORED_ENV_REASONS: dict[str, str] = {
 
 # photo_version -> photo_size equivalents used by legacy migrations.
 _PHOTO_VERSION_SIZES: dict[str, list[str]] = {
+    "original": ["original"],
     "adjusted": ["adjusted"],
     "both": ["original", "adjusted"],
 }
@@ -179,12 +180,6 @@ def migrate_legacy_keys(data: dict[str, Any]) -> None:
                 )
                 if not media.get("photo_size"):
                     sizes = list(_PHOTO_VERSION_SIZES.get(str(version).lower(), []))
-                    raw = media.get("raw")
-                    raw_mode = raw.get("mode") if isinstance(raw, dict) else None
-                    if raw_mode in {None, "raw_only", "both", "prefer_raw"}:
-                        if str(version).lower() == "original":
-                            sizes = ["original"]
-                        sizes.append("alternative")
                     if sizes:
                         media["photo_size"] = list(dict.fromkeys(sizes))
             if media.pop("photos", None) is False:
