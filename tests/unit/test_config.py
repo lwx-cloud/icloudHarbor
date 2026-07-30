@@ -109,7 +109,6 @@ def test_environment_override_supports_common_docker_parameters(
     monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
     monkeypatch.setenv("IH_REGION", "china")
     monkeypatch.setenv("IH_LIBRARIES", "root,SharedSync")
-    monkeypatch.setenv("IH_DESTINATION", "/photos/docker")
     monkeypatch.setenv("IH_DIRECTORY_PERMISSIONS", "0750")
     monkeypatch.setenv("IH_FILE_PERMISSIONS", "0640")
     monkeypatch.setenv("IH_SYNOLOGY_PHOTOS_APP_FIX", "true")
@@ -137,7 +136,7 @@ def test_environment_override_supports_common_docker_parameters(
     assert config.accounts[0].apple_id == "docker@example.com"
     assert config.accounts[0].region == "china"
     assert config.accounts[0].libraries == ["root", "SharedSync"]
-    assert config.accounts[0].destination.path == Path("/photos/docker")
+    assert config.accounts[0].destination.path == account_config.destination.path
     assert config.accounts[0].destination.directory_permissions == 0o750
     assert config.accounts[0].destination.file_permissions == 0o640
     assert config.accounts[0].destination.synology_photos_app_fix is True
@@ -274,7 +273,6 @@ def test_bootstrap_config_generates_initial_yaml_from_docker_parameters(
     path = tmp_path / "config.yaml"
     monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
     monkeypatch.setenv("IH_REGION", "china")
-    monkeypatch.setenv("IH_DESTINATION", "/photos/docker")
     monkeypatch.setenv("IH_DOWNLOAD_VIDEOS", "false")
     monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
 
@@ -284,7 +282,7 @@ def test_bootstrap_config_generates_initial_yaml_from_docker_parameters(
     assert path.is_file()
     assert config.accounts[0].apple_id == "docker@example.com"
     assert config.accounts[0].region == "china"
-    assert config.accounts[0].destination.path == Path("/photos/docker")
+    assert config.accounts[0].destination.path == Path("/photos")
     assert config.accounts[0].media.videos is False
     assert config.accounts[0].sync.schedule
 

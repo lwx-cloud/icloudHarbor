@@ -70,7 +70,6 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_APPLE_ID", ("apple_id",), _identity),
     ("IH_REGION", ("region",), _lower),
     ("IH_LIBRARIES", ("libraries",), _parse_csv),
-    ("IH_DESTINATION", ("destination", "path"), _identity),
     ("IH_MINIMUM_FREE_SPACE", ("destination", "minimum_free_space"), _identity),
     ("IH_DIRECTORY_PERMISSIONS", ("destination", "directory_permissions"), _identity),
     ("IH_FILE_PERMISSIONS", ("destination", "file_permissions"), _identity),

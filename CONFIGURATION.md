@@ -31,7 +31,6 @@
 | `IH_ACCOUNT_NAME` | `我的 iCloud` | 任意非空文本 | 日志和通知中显示的名称。 |
 | `IH_REGION` | `auto` | `auto`、`global`、`china` | 中国大陆账号建议 `china`；`auto` 复用 Session 区域。 |
 | `IH_LIBRARIES` | `root` | 逗号分隔的图库 ID/名称 | 下载一个或多个可访问图库；用 `libraries list` 查准确值。 |
-| `IH_DESTINATION` | `/photos` | 容器内绝对路径 | 下载目标；不要写 `/volume1/...` 宿主机路径。 |
 | `IH_MINIMUM_FREE_SPACE` | `10GB` | 字节数或 `10GB`、`2GiB` | 下载后必须保留的最小可用空间。 |
 | `IH_DIRECTORY_PERMISSIONS` | 空（默认 `755`） | `750`、`0750`、`0o750` | 非空时强制设置下载目录权限。 |
 | `IH_FILE_PERMISSIONS` | 空（默认 `644`） | `640`、`0640`、`0o640` | 非空时强制设置下载文件和生成 JPEG 的权限。 |
@@ -163,8 +162,6 @@ mkdir -p /volume1/docker/icloudharbor /volume2/photos/iCloud/personal
 touch /volume2/photos/iCloud/personal/.icloudharbor-mounted
 chown -R 99:100 /volume1/docker/icloudharbor /volume2/photos/iCloud/personal
 ```
-
-注意：`IH_DESTINATION` 是**容器内**路径（`/photos`），不要写 `/volume2/...` 宿主机路径。
 
 ### 场景 2：改同步频率
 
