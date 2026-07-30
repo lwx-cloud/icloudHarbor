@@ -26,6 +26,7 @@ class SyncPlan:
     downloads: list[DownloadTask] = field(default_factory=list)
     updates: list[DownloadTask] = field(default_factory=list)
     skips: list[DownloadTask] = field(default_factory=list)
+    adoptions: list[DownloadTask] = field(default_factory=list)
     local_quarantines: list[Path] = field(default_factory=list)
     remote_delete_candidates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -77,6 +78,26 @@ class AssetPlanner:
 
                 candidate = destination / relative
                 if relative in reserved or candidate.exists():
+                    # 磁盘上已有匹配大小的文件, 认领到数据库避免重下
+                    if (
+                        relative not in reserved
+                        and candidate.is_file()
+                        and resource.size is not None
+                        and candidate.stat().st_size == resource.size
+                    ):
+                        sha256_hash = file_sha256(candidate)
+                        self.repository.record_download(
+                            asset,
+                            resource,
+                            str(relative).replace("\\", "/"),
+                            candidate.stat().st_size,
+                            sha256_hash,
+                        )
+                        task = DownloadTask(asset, resource, relative)
+                        plan.skips.append(task)
+                        plan.adoptions.append(task)
+                        reserved.add(relative)
+                        continue
                     relative = namer.resolve_conflict(relative, asset)
                     counter = 2
                     while relative in reserved or (destination / relative).exists():

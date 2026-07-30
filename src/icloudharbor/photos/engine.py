@@ -133,12 +133,14 @@ class PhotosEngine:
                     payload={
                         "downloads": plan.download_count,
                         "skips": len(plan.skips),
+                        "adoptions": len(plan.adoptions),
                         "estimated_bytes": plan.estimated_bytes,
                     },
                 )
+                skip_note = f"（含 {len(plan.adoptions)} 个认领已有文件）" if plan.adoptions else ""
                 LOGGER.info(
                     f"扫描完成：项目={len(limited_assets)}；待下载={plan.download_count}；"
-                    f"已存在={len(plan.skips)}；预计数据={plan.estimated_bytes} 字节"
+                    f"已存在={len(plan.skips)}{skip_note}；预计数据={plan.estimated_bytes} 字节"
                 )
                 self._check_plan_space(account, plan)
 

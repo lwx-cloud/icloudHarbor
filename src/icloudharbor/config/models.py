@@ -74,7 +74,7 @@ class MediaConfig(StrictModel):
     raw: RawConfig = Field(default_factory=RawConfig)
     convert_heic_to_jpeg: bool = False
     jpeg_path: Path | None = None
-    jpeg_quality: Annotated[int, Field(ge=0, le=100)] = 90
+    jpeg_quality: Annotated[int, Field(ge=0, le=100)] = 100
 
     @field_validator("photo_size")
     @classmethod
