@@ -211,3 +211,9 @@ docker build .
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
 `protocol/pyicloud_adapter.py` 添加兼容和回归测试，不能把底层对象泄露到业务层。
+
+
+## 9.未完成的
+1：确定为什么我这边将代码推送到了github，github正常会自动生成hub docker最新版本的，但是我群晖拉取好像还是低版本。
+2、应该要参考icloupd一样，看看他的项目，如果验证码密码没有输入，容器 up -d后他是怎么等待用户输入docker exec -it icloudpd sync-icloud.sh --Initialise的，输入后又执行了什么操作？？？输入又账号秘密的情况下在此输入docker exec -it icloudpd sync-icloud.sh --Initialise又会怎么样，3、如果用户登录缓存过期了输入docker exec -it icloudpd reauth.sh
+又会怎么样。记录icloudp项目是怎么处理的
