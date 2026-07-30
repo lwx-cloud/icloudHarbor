@@ -90,7 +90,7 @@
 
 **0.3.0 删除的参数**：`IH_PHOTO_VERSION`（并入 `IH_PHOTO_SIZE`）、`IH_SYNC_INTERVAL`（并入 `IH_SCHEDULE`）、`IH_VERIFY_HASH`、`IH_KEEP_PARTIAL`、`IH_CHUNK_SIZE`、`IH_MOUNTED_MARKER`、`IH_DOWNLOAD_PHOTOS`、`IH_KEEP_UNICODE`、`IH_UMASK`、`IH_NOTIFY_NO_CHANGES`（并入 `IH_NOTIFY_SUCCESS`）、`MEDIA_ID_DELETE`。旧 `.env`/`config.yaml` 里的这些设置会在启动时自动迁移或忽略并给出警告，不会导致启动失败。
 
-**0.3.2 变更**：Live Photo 专属资源与泛型 photo_*/video_* 同版本去重，修复重复下载；`IH_JPEG_QUALITY` 默认值从 90 改为 100；磁盘已有文件若大小匹配则自动认领；启动日志精简。
+**0.3.3 变更**：移除 `IH_DESTINATION`，下载目录固定为 `/photos`（`IH_PHOTOS_PATH` 指哪下哪）；Live Photo 同版本去重；`jpeg_quality` 默认 100；认领已有文件；精简启动日志。
 
 ### 仅 `config.yaml` 可用的参数
 

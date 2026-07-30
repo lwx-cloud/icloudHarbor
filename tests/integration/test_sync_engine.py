@@ -48,11 +48,11 @@ def test_download_log_uses_docker_host_photo_path(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("IH_PHOTOS_PATH", "/volume2/ceshi/icloudharbor")
 
     path = display_download_path(
-        Path("/photos/personal"),
+        Path("/photos"),
         Path("2021/08/28/IMG_4969.HEIC"),
     )
 
-    assert path == "/volume2/ceshi/icloudharbor/personal/2021/08/28/IMG_4969.HEIC"
+    assert path == "/volume2/ceshi/icloudharbor/2021/08/28/IMG_4969.HEIC"
 
 
 def test_missing_recorded_file_is_downloaded_again_to_the_same_path(
