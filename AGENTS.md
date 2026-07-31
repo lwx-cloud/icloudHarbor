@@ -16,7 +16,7 @@
 
 判断“当前实现是什么”时，事实优先级为：
 
-1. `src/` 的实现与对应测试；
+1. `src/` 的实现与本机存在的对应测试；
 2. `docker-compose.yml`、`Dockerfile`、入口脚本和 CI；
 3. `CONFIGURATION.md` 与 `README.md`；
 4. 本文件末尾带日期的历史验证和外部项目调查。
@@ -147,9 +147,10 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
   参数，不包含 Apple 密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
-- `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
-  触发的 Docker Hub 发布。
-- `tests/`：单元和集成测试，不连接真实 Apple 服务。
+- `.github/workflows/ci.yml`：Python 3.12/3.13 静态检查、本地测试存在时的测试、
+  amd64/arm64 镜像构建，以及版本标签触发的 Docker Hub 发布。
+- `tests/`：仅在维护者本机保留的单元和集成测试，不连接真实 Apple 服务；目录被
+  `.gitignore` 排除，不上传到 GitHub。
 
 ### `src/icloudharbor`
 
@@ -276,7 +277,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 uv sync --frozen --extra dev
 ```
 
-按风险先运行聚焦测试，例如：
+`tests/` 仅在维护者本机存在。目录可用时按风险先运行聚焦测试，例如：
 
 ```bash
 uv run pytest tests/unit/test_config.py
@@ -285,7 +286,7 @@ uv run pytest tests/integration/test_auth_and_cli.py
 uv run pytest tests/integration/test_sync_engine.py
 ```
 
-发布前完整门禁：
+发布前完整门禁；没有本地 `tests/` 时跳过 pytest，但不得声称测试已通过：
 
 ```bash
 uv run ruff check .
@@ -334,8 +335,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 
 ## 9. 发布规则
 
-- `.github/workflows/ci.yml` 会在每次 push 和 PR 上测试及构建，但只有 Git ref 以
-  `refs/tags/v` 开头时才登录并推送 Docker Hub。普通 `git push` 不发布镜像。
+- `.github/workflows/ci.yml` 会在每次 push 和 PR 上执行静态检查及构建；checkout 中存在
+  `tests/` 时才运行 pytest。只有 Git ref 以 `refs/tags/v` 开头时才登录并推送 Docker Hub。
+  普通 `git push` 不发布镜像。
 - `latest` 只是可变标签。`docker compose up -d` 不负责查询远端更新，群晖下载新镜像后也不会
   自动替换已经运行的旧容器。升级必须依次执行 `docker compose pull` 和
   `docker compose up -d --force-recreate --remove-orphans`，再以容器内
