@@ -97,8 +97,7 @@ class StateRepository:
                 row.last_auth_at = datetime.now(UTC)
                 session.execute(
                     delete(NotificationStateRow).where(
-                        NotificationStateRow.key
-                        == self.auth_required_notification_key(account_id)
+                        NotificationStateRow.key == self.auth_required_notification_key(account_id)
                     )
                 )
 
