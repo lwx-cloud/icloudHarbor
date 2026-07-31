@@ -58,7 +58,7 @@
 | `IH_WECOM_CONTENT_SOURCE_URL` | 否 | 空 | 完整 URL | 设置通知中的“查看详情”链接。 |
 | `IH_WECOM_NAME` | 否 | 空 | 任意文本 | 设置消息中显示的来源名称。 |
 | `MEDIA_ID_DOWNLOAD` | 否 | 空 | 企业微信素材 ID | 设置同步成功通知封面。 |
-| `MEDIA_ID_STARTUP` | 否 | 空 | 企业微信素材 ID | 设置容器启动通知封面。 |
+| `MEDIA_ID_STARTUP` | 否 | 空 | 企业微信素材 ID | 设置容器启动和认证恢复通知封面。 |
 | `MEDIA_ID_WARNING` | 否 | 空 | 企业微信素材 ID | 设置失败和认证失效通知封面。 |
 | `MEDIA_ID_EXPIRATION` | 否 | 空 | 企业微信素材 ID | 设置认证临期通知封面。 |
 
@@ -182,14 +182,19 @@
 | --- | --- | --- | --- | --- |
 | `IH_NOTIFICATION_TITLE`（`notifications.title`） | 否 | `iCloudHarbor` | 任意非空文本 | 设置通知标题前缀。 |
 | `IH_SILENT_NOTIFICATIONS`（`notifications.silent`） | 否 | `false` | `true`、`false` | 设置 Bark、Telegram 和 Webhook 是否静默通知。 |
-| `IH_NOTIFY_STARTUP`（`notifications.startup`） | 否 | `false` | `true`、`false` | 是否发送容器启动通知。 |
+| `IH_NOTIFY_STARTUP`（`notifications.startup`） | 否 | `false` | `true`、`false` | 是否发送普通容器启动通知；关闭认证通知时，也控制首次未认证的合并启动消息。 |
 | `IH_NOTIFY_SUCCESS`（`notifications.success`） | 否 | `true` | `true`、`false` | 是否发送同步成功通知，包括没有新文件。 |
 | `IH_NOTIFY_FAILURE`（`notifications.failure`） | 否 | `true` | `true`、`false` | 是否发送同步失败、空间不足和限流通知。 |
-| `IH_NOTIFY_AUTH_REQUIRED`（`notifications.auth_required`） | 否 | `true` | `true`、`false` | 是否发送认证失效和认证临期通知。 |
+| `IH_NOTIFY_AUTH_REQUIRED`（`notifications.auth_required`） | 否 | `true` | `true`、`false` | 是否发送等待认证、认证失效、认证临期和认证恢复通知。 |
 | `IH_NOTIFICATION_DAYS`（`notifications.notification_days`） | 否 | `7` | `1`–`30` 天 | 设置认证到期前多少天开始提醒。 |
 
-启动通知会根据实际配置显示“正在检查 iCloud”、延迟分钟数或下一次同步时间。同步成功但
-没有新文件时标题为“已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。
+已认证状态下的启动通知会根据实际配置显示“正在检查 iCloud”、延迟分钟数或下一次同步时间。
+首次未认证启动只发送一条“容器已启动，等待 Apple 认证”的合并消息，不再紧接着发送第二条
+认证失败消息。启用 `auth_required` 时，同一认证问题会在 SQLite 中持久去重，因此容器重启和
+后续调度都不会重复提醒；`setup` 或 `session renew` 成功后会发送认证恢复消息，说明后台同步
+请求已提交，并重新允许未来新的认证问题触发提醒。关闭 `auth_required` 但开启 `startup` 时，
+合并消息仍作为普通启动消息发送；两个开关都关闭时不发送。同步成功但没有新文件时标题为
+“已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。
 
 注意事项：
 
@@ -250,8 +255,8 @@ docker compose exec icloudharbor icloudharbor setup
 docker compose logs -f icloudharbor
 ```
 
-`setup` 会读取密码 → 输入双重认证验证码 → 通知容器后台立即同步 → 结束交互命令。
-下载过程继续显示在主容器日志中。
+`setup` 会读取密码 → 输入双重认证验证码 → 通知容器后台立即同步 → 发送认证恢复通知（已启用
+认证通知时）→ 结束交互命令。下载过程继续显示在主容器日志中。
 
 默认路径对应关系：
 
@@ -474,7 +479,7 @@ chmod 600 ./data/config/notification-keys/*
 | `content_source_url` | 否 | 空 | 完整 URL | 设置企业微信“查看详情”链接。 |
 | `name` | 否 | 空 | 任意文本 | 设置企业微信消息来源名称。 |
 | `media_id_download` | 否 | 空 | 素材 ID | 设置企业微信成功通知封面。 |
-| `media_id_startup` | 否 | 空 | 素材 ID | 设置企业微信启动通知封面。 |
+| `media_id_startup` | 否 | 空 | 素材 ID | 设置企业微信启动和认证恢复通知封面。 |
 | `media_id_warning` | 否 | 空 | 素材 ID | 设置企业微信警告通知封面。 |
 | `media_id_expiration` | 否 | 空 | 素材 ID | 设置企业微信认证临期通知封面。 |
 | `url`（Webhook） | 是 | 无 | 完整 URL | 设置 Webhook 接收地址。 |

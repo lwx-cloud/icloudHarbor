@@ -47,6 +47,12 @@ SYNC_ERROR_MESSAGES = {
     "DATABASE_ERROR": "本地状态数据库异常。",
     "DATA_INTEGRITY_ERROR": "文件下载完成后校验失败。",
 }
+AUTH_REQUIRED_ERROR_CODES = {
+    "AUTH_REQUIRED",
+    "TERMS_REQUIRED",
+    "WEB_ACCESS_DISABLED",
+    "ADP_APPROVAL_REQUIRED",
+}
 
 
 class HarborApplication:
@@ -102,6 +108,61 @@ class HarborApplication:
 
     def credential_store(self, account: AccountConfig) -> CredentialStore:
         return CredentialStore(self.credential_root, account.id)
+
+    def notify_auth_required(
+        self,
+        account: AccountConfig,
+        event: NotificationEvent,
+    ) -> bool:
+        claim = self.repository.auth_required_notification_key(account.id)
+        if not self.repository.claim_notification(claim):
+            return False
+        try:
+            results = self.notifier.send(event)
+        except Exception as exc:
+            self.repository.release_notification_claim(claim)
+            LOGGER.warning(
+                "auth_required_notification_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        if any(result.success for result in results):
+            return True
+        self.repository.release_notification_claim(claim)
+        return False
+
+    def notify_auth_recovered(
+        self,
+        account: AccountConfig,
+        *,
+        renewal: bool = False,
+    ) -> bool:
+        self.repository.release_notification_claim(
+            self.repository.auth_required_notification_key(account.id)
+        )
+        action = "renew" if renewal else "setup"
+        title = "认证续期成功" if renewal else "首次认证成功"
+        message = (
+            "Apple 认证续期已完成，后台同步请求已提交。"
+            if renewal
+            else "Apple 认证已完成，后台首次同步请求已提交。"
+        )
+        try:
+            results = self.notifier.send(
+                NotificationEvent(
+                    NotificationType.AUTH_RECOVERED,
+                    f"{self.config.notifications.title} {title}",
+                    f"账号：{account.name}\n{message}",
+                    {"account_id": account.id, "action": action},
+                )
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "auth_recovered_notification_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        return any(result.success for result in results)
 
     @contextmanager
     def account_operation(self, account: AccountConfig) -> Iterator[None]:
@@ -178,6 +239,10 @@ class HarborApplication:
                 LOGGER.info(
                     f"Apple 认证到期时间：{local_expiry:%Y-%m-%d %H:%M:%S}；剩余约 {remaining} 天"
                 )
+        if self.protocol(account).auth_status() == AuthStatus.AUTHENTICATED:
+            self.repository.release_notification_claim(
+                self.repository.auth_required_notification_key(account.id)
+            )
         self._notify_sync(account, result)
         return result
 
@@ -269,12 +334,7 @@ class HarborApplication:
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED
             title_suffix = "同步完成" if result.downloaded_count else "已是最新"
-        elif result.error_code in {
-            "AUTH_REQUIRED",
-            "TERMS_REQUIRED",
-            "WEB_ACCESS_DISABLED",
-            "ADP_APPROVAL_REQUIRED",
-        }:
+        elif result.error_code in AUTH_REQUIRED_ERROR_CODES:
             event_type = NotificationType.AUTH_REQUIRED
             title_suffix = "需要处理 Apple 认证"
         elif result.status == "PARTIAL":
@@ -313,14 +373,16 @@ class HarborApplication:
                 )
             )
 
-        self.notifier.send(
-            NotificationEvent(
-                event_type,
-                f"{self.config.notifications.title} {title_suffix}",
-                "\n".join(lines),
-                {"run_id": result.run_id, "error_code": result.error_code},
-            )
+        event = NotificationEvent(
+            event_type,
+            f"{self.config.notifications.title} {title_suffix}",
+            "\n".join(lines),
+            {"run_id": result.run_id, "error_code": result.error_code},
         )
+        if event_type == NotificationType.AUTH_REQUIRED:
+            self.notify_auth_required(account, event)
+            return
+        self.notifier.send(event)
 
     @staticmethod
     def _format_data_size(size: int) -> str:

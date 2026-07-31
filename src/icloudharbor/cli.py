@@ -43,6 +43,16 @@ AUTH_REQUIRED_ERROR_CODES = {
     "ADP_APPROVAL_REQUIRED",
 }
 SYNC_REQUEST_POLL_SECONDS = 1.0
+AUTH_ACTION_STATUSES = {
+    AuthStatus.AUTH_REQUIRED,
+    AuthStatus.TWO_FACTOR_REQUIRED,
+    AuthStatus.SECURITY_KEY_REQUIRED,
+    AuthStatus.TERMS_REQUIRED,
+    AuthStatus.WEB_ACCESS_DISABLED,
+    AuthStatus.ADP_APPROVAL_REQUIRED,
+    AuthStatus.AUTH_FAILED,
+    AuthStatus.REAUTHENTICATION_REQUIRED,
+}
 
 app = typer.Typer(
     name="icloudharbor",
@@ -327,6 +337,7 @@ def setup(
         typer.echo("当前账号正在同步或认证，请等待其结束后重新运行 setup。", err=True)
         raise typer.Exit(1) from exc
 
+    instance.notify_auth_recovered(account)
     typer.echo("5/5 设置完成，已通知容器后台开始首次同步")
     typer.echo("  当前认证命令现在退出；下载由主容器继续执行。")
     typer.echo(f"  查看下载日志：docker logs -f {_container_name()}")
@@ -367,6 +378,7 @@ def session_renew(
         raise typer.Exit(1) from exc
     finally:
         password = ""
+    instance.notify_auth_recovered(account, renewal=True)
     typer.echo("续期完成，已通知容器后台同步。")
     typer.echo(f"当前认证命令现在退出；查看下载日志：docker logs -f {_container_name()}")
 
@@ -663,6 +675,39 @@ def _startup_notification(
     )
 
 
+def _startup_auth_notification(
+    instance: HarborApplication,
+    account: AccountConfig,
+) -> NotificationEvent | None:
+    status = instance.repository.get_auth_status(account.id)
+    credentials_exist = instance.credential_store(account).exists()
+    if status == AuthStatus.AUTHENTICATED:
+        return None
+    if credentials_exist and status not in AUTH_ACTION_STATUSES:
+        return None
+
+    event_type = (
+        NotificationType.AUTH_REQUIRED
+        if instance.config.notifications.auth_required
+        else NotificationType.APP_STARTED
+    )
+    return NotificationEvent(
+        event_type,
+        f"{instance.config.notifications.title} 等待 Apple 认证",
+        (
+            f"账号：{account.name}\n"
+            "容器已启动，但 Apple 认证尚未完成。\n"
+            f"请运行：{_auth_command(instance, account)}\n"
+            "认证成功后后台会自动开始同步。"
+        ),
+        {
+            "account_id": account.id,
+            "error_code": "AUTH_REQUIRED",
+            "startup": True,
+        },
+    )
+
+
 @app.command("daemon")
 def daemon(ctx: typer.Context) -> None:
     """Run the container's foreground scheduler without opening a network port."""
@@ -682,8 +727,15 @@ def daemon(ctx: typer.Context) -> None:
                 LOGGER.info(f"下一次同步：{run_at:%Y-%m-%d %H:%M:%S %Z}")
 
     scheduler = SchedulerService(instance.config, scheduled)
+    auth_event = _startup_auth_notification(instance, account)
+    if auth_event is not None:
+        if auth_event.type == NotificationType.AUTH_REQUIRED:
+            instance.notify_auth_required(account, auth_event)
+        else:
+            instance.notifier.send(auth_event)
     scheduler.start()
-    instance.notifier.send(_startup_notification(instance, account, scheduler))
+    if auth_event is None:
+        instance.notifier.send(_startup_notification(instance, account, scheduler))
     LOGGER.info("iCloudHarbor 调度器已启动")
     for job_id, run_at in scheduler.next_run_times():
         LOGGER.info(f"下一次任务：{job_id}；{run_at:%Y-%m-%d %H:%M:%S %Z}")

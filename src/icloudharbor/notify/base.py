@@ -69,9 +69,11 @@ class NotifierHub:
             return self.config.startup
         if event.type == NotificationType.SYNC_COMPLETED:
             return self.config.success
-        if event.type == NotificationType.AUTH_REQUIRED:
-            return self.config.auth_required
-        if event.type == NotificationType.AUTH_EXPIRING:
+        if event.type in {
+            NotificationType.AUTH_REQUIRED,
+            NotificationType.AUTH_EXPIRING,
+            NotificationType.AUTH_RECOVERED,
+        }:
             return self.config.auth_required
         return self.config.failure
 
@@ -247,7 +249,10 @@ class NotifierHub:
         channel: NotificationChannelConfig,
         event_type: NotificationType,
     ) -> str | None:
-        if event_type == NotificationType.APP_STARTED:
+        if event_type in {
+            NotificationType.APP_STARTED,
+            NotificationType.AUTH_RECOVERED,
+        }:
             return channel.media_id_startup
         if event_type == NotificationType.SYNC_COMPLETED:
             return channel.media_id_download

@@ -95,6 +95,12 @@ class StateRepository:
             row.auth_status = status.value
             if status == AuthStatus.AUTHENTICATED:
                 row.last_auth_at = datetime.now(UTC)
+                session.execute(
+                    delete(NotificationStateRow).where(
+                        NotificationStateRow.key
+                        == self.auth_required_notification_key(account_id)
+                    )
+                )
 
     def get_auth_status(self, account_id: str) -> AuthStatus:
         with self.database.sessions() as session:
@@ -504,6 +510,10 @@ class StateRepository:
         except IntegrityError:
             return False
         return True
+
+    @staticmethod
+    def auth_required_notification_key(account_id: str) -> str:
+        return f"auth-required:{account_id}"
 
     def release_notification_claim(self, key: str) -> None:
         with self.database.sessions.begin() as session:
