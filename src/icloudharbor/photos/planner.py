@@ -82,10 +82,7 @@ class AssetPlanner:
                     # 不要求远端 size 匹配: 远端可能不返回 size,
                     # 且网络文件系统的 stat 可能不准确.
                     # 重新下载并重命名(旧行为)远比认领更差.
-                    if (
-                        relative not in reserved
-                        and candidate.is_file()
-                    ):
+                    if relative not in reserved and candidate.is_file():
                         sha256_hash = file_sha256(candidate)
                         self.repository.record_download(
                             asset,
