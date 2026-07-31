@@ -229,6 +229,18 @@
 
 ## 二、三分钟上手
 
+已经安装 Docker Engine 和 `docker compose` 插件的 Linux/群晖用户，可以直接启动一键向导：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
+```
+
+向导会询问本章的新手参数、创建挂载标记、启动容器并运行 `doctor`，随后可直接进入交互认证。
+Apple 密码和验证码始终只由容器内的 `icloudharbor setup` 读取，不会写入 `.env` 或命令参数。
+重复运行安装器只更新 Compose 和镜像，不覆盖现有配置、数据库、Session、凭据或照片。下面是
+等价的手动部署步骤。一键安装默认把运行数据放在安装目录的 `data/config`，让 root 管理的
+`.env`、Compose 与容器可写数据分离；因此配置目录不能与安装目录完全相同。
+
 **1. 准备目录和挂载标记**（安全开关：没有它就拒绝下载，防止照片卷未挂载时写爆容器层）：
 
 ```bash

@@ -53,6 +53,9 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
+- `deploy/install.sh` 提供面向 Linux 和群晖 SSH 的 `curl | sudo bash` 安装向导：通过
+  `/dev/tty` 收集非敏感部署参数，创建挂载标记，拉取并启动生产镜像，运行 `doctor` 后再把
+  Apple 密码和验证码输入交给容器内的 `setup`。
 - `icloudharbor setup` 以星号遮罩读取密码、完成认证并保存本地续期凭据，然后把首次同步
   持久化交给容器后台并退出；下载过程统一显示在主容器日志。
 - `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码；成功后同样
@@ -152,6 +155,9 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `Dockerfile`：多阶段生产镜像；构建依赖与运行镜像分离。
 - `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置必需参数与持久化卷。
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
+- `deploy/install.sh`：幂等 Docker 安装/更新向导；首次生成 root 管理的 `.env`，默认把容器
+  可写状态放在安装目录的 `data/config`，重跑必须保留所有现有配置和持久化数据，只更新受
+  管理的 Compose 文件与镜像。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
@@ -239,6 +245,12 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
   通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
+- 一键安装器必须从 `/dev/tty` 读取交互输入；经管道执行时不得从标准输入读取提示答案。
+- 一键安装的控制目录和 `.env` 必须由 root 管理，不能把控制目录直接挂载为容器可写的
+  `/config`；Compose 项目名保存在安装器管理标记中，重跑时不得重新推断或任意改变。
+- 安装器只可调整自己新建的专用目录，不得递归 `chown` 已有照片库或擅自修改 NAS ACL。
+- 检测到已有 `.env` 时，安装器不得覆盖账号、路径、通知密钥或任何持久化内容；只能更新
+  Compose 文件、拉取镜像、重建容器并重新执行 `doctor`。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
 - Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`
@@ -280,6 +292,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 | SQLite 模型、锁或调度 | `database/`、`scheduler/` | `test_repository.py`、`test_scheduler.py`、集成测试；必须考虑旧库升级 |
 | 通知、日志或用户可见路径 | `notify/`、`application.py`、`observability/` | `test_notify.py`、`test_observability.py`；检查脱敏、开关和结构化 payload |
 | 依赖、镜像或发布 | `pyproject.toml`、`uv.lock`、Dockerfile、Compose、CI | Python 3.12/3.13、两套 Compose 配置、amd64/arm64 构建 |
+| 一键安装与升级 | `deploy/install.sh`、Compose、`.env.example` | `bash -n`、ShellCheck（可用时）、管道输入与 `/dev/tty`、首次/重跑两条路径、README 命令 |
 
 开发环境使用 Python 3.12 或 3.13 与 `uv`。首次安装依赖：
 
@@ -307,6 +320,7 @@ uv build
 docker compose config --quiet
 docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet
 docker build .
+bash -n deploy/install.sh
 ```
 
 Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example` 复制测试值。不得使用不带

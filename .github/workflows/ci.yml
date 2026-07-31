@@ -21,6 +21,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv python install ${{ matrix.python-version }}
       - run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
+      - name: Validate Docker installer
+        run: |
+          bash -n deploy/install.sh
+          bash deploy/install.sh --help >/dev/null
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/icloudharbor

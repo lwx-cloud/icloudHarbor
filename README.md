@@ -17,8 +17,9 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 [快速开始](#快速开始) · [群晖部署](#群晖部署示例) · [认证续期](#认证续期与密码) ·
 [完整配置](CONFIGURATION.md) · [更新](#更新) · [故障排查](#故障排查)
 
-本文中的 Compose 命令都应在仓库目录执行，并使用固定的服务名 `icloudharbor`。即使修改了
-`IH_CONTAINER_NAME`，这些命令也不需要跟着修改。
+本文中的 Compose 命令都应在部署目录执行：手动安装时是克隆的仓库目录，一键安装时是向导
+最后显示的安装目录。命令使用固定的服务名 `icloudharbor`；即使修改了 `IH_CONTAINER_NAME`，
+这些命令也不需要跟着修改。
 
 ## 核心能力
 
@@ -48,7 +49,48 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 
 ## 快速开始
 
-### 1. 准备环境
+### 一键安装
+
+Linux 或群晖 SSH 已经安装 Docker Engine 和 `docker compose` 插件时，运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
+```
+
+这是一条命令启动安装向导，不是把 Apple 认证改成无人值守。向导会询问 Apple Account、配置
+目录、照片目录、UID/GID、时区和同步频率，然后：
+
+1. 检查 Linux、amd64/arm64、Docker daemon 和 Compose 插件；
+2. 写入权限为 `0600` 的 `.env`，但绝不读取或保存 Apple 密码、验证码；
+3. 创建持久化目录和 `.icloudharbor-mounted` 挂载标记；
+4. 拉取 `lwxcloud/icloudharbor:latest`，启动容器并运行 `icloudharbor doctor`；
+5. 询问是否立即进入 `icloudharbor setup`，在终端中完成密码和双重认证验证码输入。
+
+普通 Linux 默认安装到 `/opt/icloudharbor`，运行数据位于其中的 `data/config`，照片目录默认
+`/srv/icloudharbor/photos`。在群晖上检测到对应存储卷时，安装目录优先使用
+`/volume1/docker/icloudharbor`，运行数据位于 `/volume1/docker/icloudharbor/data/config`，照片
+目录优先使用 `/volume2/photos/iCloud`；所有路径都会在执行前显示并允许修改。默认下载根目录
+就是所选照片目录，不会再追加 Apple ID 子目录。
+
+一键安装会让部署目录和容器可写的运行数据目录保持分离：`.env` 与 Compose 文件只允许 root
+修改，容器只写 `data/config`。因此向导不会接受把配置目录直接设成安装目录。以后从该目录
+手动执行认证、日志等 Compose 命令时需要加 `sudo`；手动克隆部署仍按下文命令执行。
+
+重复运行同一条命令会保留已有 `.env`、`config.yaml`、SQLite、Session、凭据和照片，只更新
+受管理的 Compose 文件并拉取最新镜像。安装器不会递归修改已有照片库的属主或群晖 ACL；若
+当前 UID/GID 无法写入，`doctor` 会停止向导并给出具体检查结果。
+
+直接执行远程脚本前应确认仓库来源。希望先审阅脚本时使用：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh
+less install.sh
+sudo bash install.sh
+```
+
+### 手动安装
+
+#### 1. 准备环境
 
 需要：
 
@@ -115,7 +157,7 @@ IH_DOWNLOAD_LIVE_PHOTOS=true
 sudo chown -R 1000:1000 ./data/config ./data/photos
 ```
 
-### 2. 拉取并启动
+#### 2. 拉取并启动
 
 先检查 Compose 配置是否有效。不要省略 `--quiet`；普通 `docker compose config` 会展开
 `.env`，可能把 Apple Account 或通知密钥打印到终端：
@@ -150,7 +192,7 @@ docker compose logs --tail=50 icloudharbor
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-### 3. 完成 Apple 认证
+#### 3. 完成 Apple 认证
 
 ```bash
 docker compose exec icloudharbor icloudharbor setup
@@ -366,7 +408,21 @@ docker compose exec icloudharbor icloudharbor database backup
 整个 `IH_CONFIG_PATH` 还包含 Session、加密密钥和续期凭据；如需完整备份，应先停止容器，再对
 该宿主机目录创建快照或副本。不要公开备份内容。
 
-完成所需备份后，更新部署文件并拉取新镜像：
+一键安装的用户完成备份后，可重新运行安装命令；安装器会保留持久化数据并更新 Compose 与
+镜像：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
+```
+
+自定义过安装目录时，把原目录传给安装器：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | \
+  sudo env IH_INSTALL_DIR=/实际/目录 bash
+```
+
+手动克隆仓库的用户更新部署文件并拉取新镜像：
 
 ```bash
 git pull --ff-only
