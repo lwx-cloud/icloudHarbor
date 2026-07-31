@@ -96,6 +96,13 @@ class AssetPlanner:
                         plan.adoptions.append(task)
                         reserved.add(relative)
                         continue
+                    # Same-run conflict: another resource already claimed this path.
+                    # Skip instead of renaming — the skipped resource will be
+                    # adopted from disk on the next sync run.
+                    if relative in reserved:
+                        continue
+                    # Disk conflict: path exists as something other than a regular
+                    # file (e.g. a directory with the same name).
                     relative = namer.resolve_conflict(relative, asset)
                     counter = 2
                     while relative in reserved or (destination / relative).exists():
