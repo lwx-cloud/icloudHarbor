@@ -195,87 +195,93 @@ class StateRepository:
         size: int,
         sha256: str,
     ) -> None:
-        with self.database.sessions.begin() as session:
-            library = session.scalar(
-                select(LibraryRow).where(
+        with self.database.sessions() as session:
+            library_id = session.scalar(
+                select(LibraryRow.id).where(
                     LibraryRow.account_id == asset.account_id,
                     LibraryRow.remote_library_id == asset.library_id,
                 )
             )
-            if library is None:
-                raise KeyError((asset.account_id, asset.library_id))
-            asset_row = session.scalar(
-                select(AssetRow).where(
-                    AssetRow.library_id == library.id,
-                    AssetRow.remote_asset_id == asset.asset_id,
+        if library_id is None:
+            raise KeyError((asset.account_id, asset.library_id))
+
+        metadata = json.dumps(dict(asset.metadata), ensure_ascii=False, default=str)
+        recorded_at = datetime.now(UTC)
+        with self.database.sessions.begin() as session:
+            asset_insert = sqlite_insert(AssetRow).values(
+                library_id=library_id,
+                remote_asset_id=asset.asset_id,
+                filename=asset.filename,
+                media_type=asset.media_type,
+                created_at=asset.created_at,
+                modified_at=asset.modified_at,
+                favorite=asset.favorite,
+                hidden=asset.hidden,
+                remote_deleted=asset.deleted,
+                metadata_json=metadata,
+            )
+            asset_id = session.execute(
+                asset_insert.on_conflict_do_update(
+                    index_elements=[AssetRow.library_id, AssetRow.remote_asset_id],
+                    set_={
+                        "filename": asset_insert.excluded.filename,
+                        "media_type": asset_insert.excluded.media_type,
+                        "modified_at": asset_insert.excluded.modified_at,
+                        "favorite": asset_insert.excluded.favorite,
+                        "hidden": asset_insert.excluded.hidden,
+                        "remote_deleted": asset_insert.excluded.remote_deleted,
+                        "metadata_json": asset_insert.excluded.metadata_json,
+                    },
+                ).returning(AssetRow.id)
+            ).scalar_one()
+
+            resource_insert = sqlite_insert(ResourceRow).values(
+                asset_id=asset_id,
+                remote_resource_id=resource.resource_id,
+                resource_type=resource.resource_type,
+                version=resource.version,
+                remote_size=resource.size,
+                remote_checksum=resource.checksum,
+                mime_type=resource.mime_type,
+            )
+            resource_id = session.execute(
+                resource_insert.on_conflict_do_update(
+                    index_elements=[
+                        ResourceRow.asset_id,
+                        ResourceRow.resource_type,
+                        ResourceRow.version,
+                    ],
+                    set_={
+                        "remote_resource_id": resource_insert.excluded.remote_resource_id,
+                        "remote_size": resource_insert.excluded.remote_size,
+                        "remote_checksum": resource_insert.excluded.remote_checksum,
+                        "mime_type": resource_insert.excluded.mime_type,
+                    },
+                ).returning(ResourceRow.id)
+            ).scalar_one()
+
+            local_insert = sqlite_insert(LocalFileRow).values(
+                resource_id=resource_id,
+                relative_path=relative_path,
+                size=size,
+                sha256=sha256,
+                status="VERIFIED",
+                downloaded_at=recorded_at,
+                verified_at=recorded_at,
+            )
+            session.execute(
+                local_insert.on_conflict_do_update(
+                    index_elements=[LocalFileRow.resource_id],
+                    set_={
+                        "relative_path": local_insert.excluded.relative_path,
+                        "size": local_insert.excluded.size,
+                        "sha256": local_insert.excluded.sha256,
+                        "status": local_insert.excluded.status,
+                        "downloaded_at": local_insert.excluded.downloaded_at,
+                        "verified_at": local_insert.excluded.verified_at,
+                    },
                 )
             )
-            metadata = json.dumps(dict(asset.metadata), ensure_ascii=False, default=str)
-            if asset_row is None:
-                asset_row = AssetRow(
-                    library_id=library.id,
-                    remote_asset_id=asset.asset_id,
-                    filename=asset.filename,
-                    media_type=asset.media_type,
-                    created_at=asset.created_at,
-                    modified_at=asset.modified_at,
-                    favorite=asset.favorite,
-                    hidden=asset.hidden,
-                    remote_deleted=asset.deleted,
-                    metadata_json=metadata,
-                )
-                session.add(asset_row)
-                session.flush()
-            else:
-                asset_row.filename = asset.filename
-                asset_row.media_type = asset.media_type
-                asset_row.modified_at = asset.modified_at
-                asset_row.favorite = asset.favorite
-                asset_row.hidden = asset.hidden
-                asset_row.remote_deleted = asset.deleted
-                asset_row.metadata_json = metadata
-            resource_row = session.scalar(
-                select(ResourceRow).where(
-                    ResourceRow.asset_id == asset_row.id,
-                    ResourceRow.resource_type == resource.resource_type,
-                    ResourceRow.version == resource.version,
-                )
-            )
-            if resource_row is None:
-                resource_row = ResourceRow(
-                    asset_id=asset_row.id,
-                    remote_resource_id=resource.resource_id,
-                    resource_type=resource.resource_type,
-                    version=resource.version,
-                    remote_size=resource.size,
-                    remote_checksum=resource.checksum,
-                    mime_type=resource.mime_type,
-                )
-                session.add(resource_row)
-                session.flush()
-            else:
-                resource_row.remote_resource_id = resource.resource_id
-                resource_row.remote_size = resource.size
-                resource_row.remote_checksum = resource.checksum
-                resource_row.mime_type = resource.mime_type
-            local = resource_row.local_file
-            if local is None:
-                local = LocalFileRow(
-                    resource_id=resource_row.id,
-                    relative_path=relative_path,
-                    size=size,
-                    sha256=sha256,
-                    status="VERIFIED",
-                    verified_at=datetime.now(UTC),
-                )
-                session.add(local)
-            else:
-                local.relative_path = relative_path
-                local.size = size
-                local.sha256 = sha256
-                local.status = "VERIFIED"
-                local.downloaded_at = datetime.now(UTC)
-                local.verified_at = datetime.now(UTC)
 
     def create_run(
         self,

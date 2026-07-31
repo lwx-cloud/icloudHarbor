@@ -19,7 +19,7 @@
 
 | 参数名 | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_APPLE_ID` | 是 | 无 | Apple Account 邮箱，不超过 220 个 UTF-8 字节 | 指定要备份的 iCloud 账号，并直接作为默认账号 ID；密码和验证码不写在 `.env`。 |
+| `IH_APPLE_ID` | 是 | 无 | Apple Account 邮箱，不超过 220 个 UTF-8 字节 | 指定要备份的 iCloud 账号，并直接作为默认账号 ID 和终端、通知中的显示名称；密码和验证码不写在 `.env`。 |
 | `IH_CONTAINER_NAME` | 否 | `icloudharbor` | 未占用的容器名 | 设置 Compose 创建的容器名，供 `docker logs`、`docker exec` 和日志中的认证命令使用；不影响账号、配置或照片目录。只有同一主机运行多个独立实例或名称冲突时才需修改。 |
 | `IH_CONFIG_PATH` | 否 | `./data/config` | 宿主机路径 | 保存配置、数据库、Session、凭据和通知密钥。 |
 | `IH_PHOTOS_PATH` | 否 | `./data/photos` | 宿主机路径 | 设置照片保存目录，并挂载到容器 `/photos`。 |
@@ -77,7 +77,7 @@
 | `IH_LOG_LEVEL`（`runtime.log_level`） | 否 | `INFO` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | 设置日志详细程度。 |
 | `IH_LOG_FORMAT`（`runtime.log_format`） | 否 | `text` | `text`、`json` | 设置普通文本或结构化 JSON 日志。 |
 | `IH_ACCOUNT_ID`（`accounts[].id`） | 否 | 与 `IH_APPLE_ID` 相同 | 不超过 220 个 UTF-8 字节的安全文件名 | 显式覆盖数据库、Session 和凭据使用的账号 ID；通常无需设置，修改后需重新认证。 |
-| `IH_ACCOUNT_NAME`（`accounts[].name`） | 否 | `我的 iCloud` | 任意文本 | 设置日志和通知中显示的账号名称。 |
+| `IH_ACCOUNT_NAME`（`accounts[].name`） | 否 | 与 `IH_APPLE_ID` 相同 | 任意文本 | 显式覆盖终端和通知中显示的账号名称；通常无需设置。 |
 | `IH_LIBRARIES`（`accounts[].libraries`） | 否 | `root` | 图库 ID/名称，多个用英文逗号分隔 | 设置要扫描的个人或共享图库。 |
 
 #### 存储空间与权限
@@ -371,7 +371,7 @@ runtime:
 
 accounts:
   - id: your-account@example.com
-    name: 我的 iCloud
+    name: your-account@example.com
     apple_id: your-account@example.com
     region: china
     enabled: true

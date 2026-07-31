@@ -44,9 +44,11 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.3.5`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.3.6`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
+- 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
+  `IH_ACCOUNT_NAME` 时才覆盖显示名称。
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
@@ -59,6 +61,8 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
   增量游标与定期全量扫描。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
+- 同一 Asset 的多资源并发下载使用 SQLite 原子 UPSERT 记录 Asset、Resource 和本地文件，
+  不会因 Live Photo、RAW/JPEG 或多尺寸资源同时完成而触发唯一键竞态。
 - 原始资源和转换 JPEG 的文件修改时间统一恢复为 iCloud 拍摄时间，全量扫描会校正历史文件。
 - 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
@@ -327,6 +331,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   为 iCloud 拍摄时间，群晖索引兼容处理后不再保留下载时间，全量扫描会校正历史文件；启动与
   同步结果通知按真实状态使用可读中文文案；默认账号 ID 直接使用 `IH_APPLE_ID`。145 项测试
   通过，覆盖率 81%，Ruff、格式检查与严格 mypy 全部通过。
+- 2026-07-31 的 0.3.6 并发入库修复：Asset、Resource 和本地文件改用 SQLite 原子 UPSERT，
+  修复同一 Asset 多资源并发完成时的唯一键竞态；未显式设置 `IH_ACCOUNT_NAME` 时，账号显示
+  名称跟随 `IH_APPLE_ID`。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -349,7 +356,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.3.5`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.3.6`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

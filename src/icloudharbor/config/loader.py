@@ -161,7 +161,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
         "accounts": [
             {
                 "id": apple_id,
-                "name": "我的 iCloud",
+                "name": apple_id,
                 "apple_id": apple_id,
                 "region": "auto",
                 "enabled": True,
@@ -208,8 +208,12 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
             raise ValueError("YAML accounts[0] 必须是对象")
         _apply_mapping(account, ACCOUNT_ENV_OVERRIDES)
         apple_id = _environment_value("IH_APPLE_ID")
-        if apple_id is not None and _environment_value("IH_ACCOUNT_ID") is None:
-            account["id"] = apple_id
+        if apple_id is not None:
+            apple_id = apple_id.strip()
+            if _environment_value("IH_ACCOUNT_ID") is None:
+                account["id"] = apple_id
+            if _environment_value("IH_ACCOUNT_NAME") is None:
+                account["name"] = apple_id
         sync = _mapping(account, "sync")
         if sync_interval is not None:
             sync["schedule"] = _parse_sync_interval(sync_interval)

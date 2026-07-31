@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 本文档对应源码版本 `0.3.5`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
+> 本文档对应源码版本 `0.3.6`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
 > 随时变化；请保留其他可靠备份。
 
 [快速开始](#快速开始) · [群晖部署](#群晖部署示例) · [认证续期](#认证续期与密码) ·
@@ -140,8 +140,9 @@ docker compose logs --tail=50 icloudharbor
 运行时覆盖对应 YAML 字段；`IH_CONFIG_PATH`、`IH_PHOTOS_PATH`、`IH_PUID`、`IH_PGID` 和
 `IH_CONTAINER_NAME` 属于 Compose 或容器入口参数，不写入 YAML。
 
-`IH_APPLE_ID` 会直接作为内部账号 ID，用于数据库、Session 目录和凭据文件名；它不会拼进
-照片保存路径，默认下载根目录仍是 `/photos`，也就是宿主机的 `IH_PHOTOS_PATH`。
+`IH_APPLE_ID` 会直接作为内部账号 ID，并默认作为终端和通知中的账号显示名称；它不会拼进
+照片保存路径，默认下载根目录仍是 `/photos`，也就是宿主机的 `IH_PHOTOS_PATH`。只有显式
+设置高级参数 `IH_ACCOUNT_NAME` 时才会覆盖显示名称。
 
 需要从当前源码进行本地构建时，使用开发覆盖文件：
 
