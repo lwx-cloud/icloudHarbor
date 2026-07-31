@@ -8,11 +8,17 @@ from tests.conftest import FakeProtocol
 from typer.testing import CliRunner
 
 from icloudharbor.application import HarborApplication
-from icloudharbor.cli import app
-from icloudharbor.config.models import AppConfig
+from icloudharbor.cli import (
+    _dispatch_pending_sync_requests,
+    _log_auth_guidance,
+    _run_daemon_sync,
+    app,
+)
+from icloudharbor.config.models import AccountConfig, AppConfig
 from icloudharbor.photos.engine import SyncExecution
 from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.models import AuthStatus
+from icloudharbor.scheduler.service import SchedulerService
 
 
 def test_two_factor_state_is_persisted(app_config: AppConfig) -> None:
@@ -86,30 +92,13 @@ def test_cli_session_renew_uses_saved_password_without_prompt(
     assert "正在使用本地凭据续期" in result.stdout
     assert "Apple 双重认证验证码: 123456" in result.stdout
     assert "认证成功：Apple 会话已建立并受信任" in result.stdout
+    assert "已通知容器后台同步" in result.stdout
+    requests = application.repository.pending_sync_requests("personal")
+    assert len(requests) == 1
+    assert requests[0].generation == 1
 
 
-def test_cli_setup_saves_password_and_starts_first_sync(
-    app_config: AppConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake = FakeProtocol()
-    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
-    monkeypatch.setattr("icloudharbor.cli._load_application", lambda _: application)
-    monkeypatch.setattr("icloudharbor.cli.masked_password_prompt", lambda _: "not-stored")
-
-    result = CliRunner().invoke(app, ["setup", "--account", "personal"])
-
-    assert result.exit_code == 0
-    assert fake.calls[:4] == ["logout", "authenticate", "list_libraries", "list_assets"]
-    assert fake.calls.count("list_assets") == 2
-    assert application.credential_store(app_config.accounts[0]).read() == "not-stored"
-    assert "5/5 设置完成，开始首次正式同步" in result.stdout
-    assert "个人图库: ok" in result.stdout
-    assert "状态：COMPLETED" in result.stdout
-    assert "sync plan" not in result.stdout
-
-
-def test_cli_setup_explains_when_background_sync_is_already_running(
+def test_cli_setup_saves_password_then_queues_background_sync_and_exits(
     app_config: AppConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -120,7 +109,68 @@ def test_cli_setup_explains_when_background_sync_is_already_running(
     monkeypatch.setattr(
         application,
         "run_sync",
-        lambda *_args, **_kwargs: SyncExecution(
+        lambda *_args, **_kwargs: pytest.fail("setup 不应在交互终端执行同步"),
+    )
+
+    result = CliRunner().invoke(app, ["setup", "--account", "personal"])
+
+    assert result.exit_code == 0
+    assert fake.calls == ["logout", "authenticate", "list_libraries", "list_assets"]
+    assert application.credential_store(app_config.accounts[0]).read() == "not-stored"
+    requests = application.repository.pending_sync_requests("personal")
+    assert len(requests) == 1
+    assert requests[0].generation == 1
+    assert "5/5 设置完成，已通知容器后台开始首次同步" in result.stdout
+    assert "个人图库: ok" in result.stdout
+    assert "当前认证命令现在退出" in result.stdout
+    assert "docker logs -f icloudharbor" in result.stdout
+
+
+def test_daemon_sync_acknowledges_request_and_refreshes_protocol(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    request = application.repository.request_sync("personal")
+    calls: list[tuple[str, bool]] = []
+
+    def run_sync(
+        account: AccountConfig,
+        *,
+        refresh_protocol: bool = False,
+    ) -> SyncExecution:
+        calls.append((account.id, refresh_protocol))
+        return SyncExecution("run-id", "COMPLETED", 0, 0, 0, 0, SyncPlan())
+
+    monkeypatch.setattr(
+        application,
+        "run_sync",
+        run_sync,
+    )
+
+    result = _run_daemon_sync(application, "personal")
+
+    assert result.status == "COMPLETED"
+    assert calls == [("personal", True)]
+    assert application.repository.ack_sync_request("personal", request.generation) is False
+    assert application.repository.pending_sync_requests("personal") == []
+
+
+def test_daemon_sync_retains_request_when_account_is_already_running(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    request = application.repository.request_sync("personal")
+    refresh_flags: list[bool] = []
+
+    def run_sync(
+        _account: object,
+        *,
+        refresh_protocol: bool = False,
+    ) -> SyncExecution:
+        refresh_flags.append(refresh_protocol)
+        return SyncExecution(
             "run-id",
             "SKIPPED_ALREADY_RUNNING",
             0,
@@ -128,14 +178,126 @@ def test_cli_setup_explains_when_background_sync_is_already_running(
             0,
             0,
             SyncPlan(),
-        ),
+        )
+
+    monkeypatch.setattr(application, "run_sync", run_sync)
+
+    result = _run_daemon_sync(application, "personal")
+
+    assert result.status == "SKIPPED_ALREADY_RUNNING"
+    assert refresh_flags == [True]
+    assert application.repository.pending_sync_requests("personal") == [request]
+
+
+def test_daemon_scheduled_sync_without_request_reuses_protocol(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    refresh_flags: list[bool] = []
+
+    def run_sync(
+        _account: object,
+        *,
+        refresh_protocol: bool = False,
+    ) -> SyncExecution:
+        refresh_flags.append(refresh_protocol)
+        return SyncExecution("run-id", "COMPLETED", 0, 0, 0, 0, SyncPlan())
+
+    monkeypatch.setattr(application, "run_sync", run_sync)
+
+    _run_daemon_sync(application, "personal")
+
+    assert refresh_flags == [False]
+
+
+def test_daemon_discards_removed_account_request_before_dispatching_valid_request(
+    app_config: AppConfig,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    removed = app_config.accounts[0].model_copy(update={"id": "removed", "name": "Removed account"})
+    application.repository.sync_account(removed)
+    removed_request = application.repository.request_sync(removed.id)
+    application.repository.request_sync("personal")
+    scheduler = SchedulerService(app_config, lambda _: None)
+
+    dispatched = _dispatch_pending_sync_requests(application, scheduler)
+
+    assert dispatched == 1
+    assert (
+        application.repository.ack_sync_request(
+            removed.id,
+            removed_request.generation,
+        )
+        is False
+    )
+    assert application.repository.pending_sync_requests(removed.id) == []
+    assert [job.id for job in scheduler.scheduler.get_jobs()] == ["sync-now:personal"]
+
+
+def test_requested_sync_replaces_cached_protocol_without_logging_out(
+    app_config: AppConfig,
+) -> None:
+    protocols: list[FakeProtocol] = []
+
+    def factory(_account: AccountConfig) -> FakeProtocol:
+        protocol = FakeProtocol()
+        protocols.append(protocol)
+        return protocol
+
+    application = HarborApplication(app_config, protocol_factory=factory)
+    account = app_config.accounts[0]
+    cached = application.protocol(account)
+
+    result = application.run_sync(account, refresh_protocol=True)
+
+    assert result.status == "COMPLETED"
+    assert len(protocols) == 2
+    assert "logout" not in cached.calls
+    assert "list_libraries" in protocols[1].calls
+
+
+def test_cli_setup_does_not_clear_session_while_account_operation_is_busy(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeProtocol()
+    application = HarborApplication(app_config, protocol_factory=lambda _: fake)
+    monkeypatch.setattr("icloudharbor.cli._load_application", lambda _: application)
+    monkeypatch.setattr(
+        "icloudharbor.cli.masked_password_prompt",
+        lambda _: pytest.fail("账号忙时不应询问密码"),
     )
 
-    result = CliRunner().invoke(app, ["setup", "--account", "personal"])
+    with application.account_operation(app_config.accounts[0]):
+        result = CliRunner().invoke(app, ["setup", "--account", "personal"])
 
-    assert result.exit_code == 0
-    assert "首次正式同步已在后台运行，本次不重复启动" in result.stdout
-    assert "状态：SKIPPED_ALREADY_RUNNING" not in result.stdout
+    assert result.exit_code == 1
+    assert "当前账号正在同步或认证" in result.stderr
+    assert fake.calls == []
+
+
+def test_daemon_auth_guidance_uses_setup_then_renew(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    account = app_config.accounts[0]
+    warnings: list[str] = []
+
+    class RecordingLogger:
+        def warning(self, message: str) -> None:
+            warnings.append(message)
+
+    monkeypatch.setattr("icloudharbor.cli.LOGGER", RecordingLogger())
+
+    _log_auth_guidance(application, account)
+    assert any("icloudharbor setup" in message for message in warnings)
+
+    warnings.clear()
+    application.credential_store(account).write("not-stored")
+    _log_auth_guidance(application, account)
+    assert any("icloudharbor session renew" in message for message in warnings)
 
 
 def test_sqlite_online_backup_is_consistent(

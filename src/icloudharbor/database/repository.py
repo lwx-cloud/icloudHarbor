@@ -11,7 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from icloudharbor.config.models import AccountConfig
@@ -25,6 +26,7 @@ from icloudharbor.database.models import (
     NotificationStateRow,
     ResourceRow,
     SyncEventRow,
+    SyncRequestRow,
     SyncRunRow,
 )
 from icloudharbor.database.session import Database
@@ -54,6 +56,13 @@ class RunSummary:
     failed_count: int
     bytes_downloaded: int
     error_code: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class SyncRequest:
+    account_id: str
+    generation: int
+    requested_at: datetime
 
 
 class StateRepository:
@@ -376,6 +385,70 @@ class StateRepository:
                 }
                 for row in rows
             ]
+
+    def request_sync(self, account_id: str) -> SyncRequest:
+        requested_at = datetime.now(UTC)
+        statement = (
+            sqlite_insert(SyncRequestRow)
+            .values(
+                account_id=account_id,
+                requested_generation=1,
+                handled_generation=0,
+                requested_at=requested_at,
+            )
+            .on_conflict_do_update(
+                index_elements=[SyncRequestRow.account_id],
+                set_={
+                    "requested_generation": SyncRequestRow.requested_generation + 1,
+                    "requested_at": requested_at,
+                },
+            )
+            .returning(
+                SyncRequestRow.requested_generation,
+                SyncRequestRow.requested_at,
+            )
+        )
+        with self.database.sessions.begin() as session:
+            generation, stored_at = session.execute(statement).one()
+        return SyncRequest(account_id, int(generation), stored_at)
+
+    def pending_sync_requests(self, account_id: str | None = None) -> list[SyncRequest]:
+        statement = (
+            select(SyncRequestRow)
+            .where(SyncRequestRow.requested_generation > SyncRequestRow.handled_generation)
+            .order_by(SyncRequestRow.requested_at, SyncRequestRow.account_id)
+        )
+        if account_id is not None:
+            statement = statement.where(SyncRequestRow.account_id == account_id)
+        with self.database.sessions() as session:
+            rows = session.scalars(statement).all()
+            return [
+                SyncRequest(
+                    row.account_id,
+                    row.requested_generation,
+                    row.requested_at,
+                )
+                for row in rows
+            ]
+
+    def ack_sync_request(self, account_id: str, generation: int) -> bool:
+        if generation < 1:
+            return False
+        statement = (
+            update(SyncRequestRow)
+            .where(
+                SyncRequestRow.account_id == account_id,
+                SyncRequestRow.handled_generation < generation,
+                SyncRequestRow.requested_generation >= generation,
+            )
+            .values(
+                handled_generation=generation,
+                handled_at=datetime.now(UTC),
+            )
+        )
+        with self.database.sessions.begin() as session:
+            result = session.execute(statement)
+            return bool(result.rowcount)
 
     def save_config_revision(self, snapshot: str) -> str:
         digest = hashlib.sha256(snapshot.encode()).hexdigest()

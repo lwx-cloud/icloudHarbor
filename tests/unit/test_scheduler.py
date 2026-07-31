@@ -60,6 +60,28 @@ def test_interval_first_run_honors_download_delay_without_run_on_start(
     assert seconds_until_first_run >= (12 * 60 + 14) * 60
 
 
+def test_trigger_now_coalesces_queued_and_active_requests(
+    app_config: AppConfig,
+) -> None:
+    observations: list[tuple[str, bool]] = []
+    scheduler: SchedulerService
+
+    def callback(account_id: str) -> str:
+        observations.append((account_id, scheduler.trigger_now(account_id)))
+        return "completed"
+
+    scheduler = SchedulerService(app_config, callback)
+
+    assert scheduler.trigger_now("personal") is True
+    assert scheduler.trigger_now("personal") is False
+    job = scheduler.scheduler.get_job("sync-now:personal")
+    assert job is not None
+
+    assert job.func(*job.args) == "completed"
+    assert observations == [("personal", False)]
+    assert scheduler.trigger_now("personal") is True
+
+
 def test_file_lock_owner_recovers_orphaned_database_lease(
     app_config: AppConfig,
     tmp_path: Path,

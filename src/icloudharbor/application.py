@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,7 +22,9 @@ from icloudharbor.notify import NotificationEvent, NotifierHub
 from icloudharbor.notify.base import NotificationType
 from icloudharbor.observability.health import HealthService
 from icloudharbor.photos.engine import PhotosEngine, SyncExecution
+from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
+from icloudharbor.protocol.exceptions import ErrorCode, HarborError
 from icloudharbor.protocol.models import AuthResult, AuthStatus
 from icloudharbor.protocol.pyicloud_adapter import PyicloudProtocolAdapter
 from icloudharbor.scheduler.locks import LockCoordinator
@@ -86,6 +88,14 @@ class HarborApplication:
     def credential_store(self, account: AccountConfig) -> CredentialStore:
         return CredentialStore(self.credential_root, account.id)
 
+    @contextmanager
+    def account_operation(self, account: AccountConfig) -> Iterator[None]:
+        with self.locks.acquire(f"account-operation:{account.id}"):
+            yield
+
+    def discard_protocol(self, account: AccountConfig) -> None:
+        self._protocols.pop(account.id, None)
+
     def login(self, account: AccountConfig, password: str | None) -> AuthResult:
         return self.auth_manager(account).login(password)
 
@@ -103,45 +113,89 @@ class HarborApplication:
         dry_run: bool = False,
         force_full_scan: bool = False,
         authenticate: bool = True,
+        refresh_protocol: bool = False,
     ) -> SyncExecution:
         started = time.monotonic()
         LOGGER.info(f"同步开始：{account.name}")
-        if authenticate:
-            with suppress(Exception):
-                self.ensure_session(account)
-                # The engine records a stable AUTH_REQUIRED result and keeps
-                # long-running containers alive.
         try:
-            self._notify_auth_expiration(account)
-        except Exception as exc:
-            LOGGER.warning(
-                "auth_expiration_check_failed",
-                account_id=account.id,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        result = PhotosEngine(
-            self.protocol(account),
-            self.repository,
-            self.database,
-            self.locks,
-        ).run(account, dry_run=dry_run, force_full_scan=force_full_scan)
+            with self.account_operation(account):
+                if refresh_protocol:
+                    self.discard_protocol(account)
+                if authenticate:
+                    with suppress(Exception):
+                        self.ensure_session(account)
+                        # The engine records a stable AUTH_REQUIRED result and keeps
+                        # long-running containers alive.
+                try:
+                    self._notify_auth_expiration(account)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "auth_expiration_check_failed",
+                        account_id=account.id,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                result = PhotosEngine(
+                    self.protocol(account),
+                    self.repository,
+                    self.database,
+                    self.locks,
+                ).run(account, dry_run=dry_run, force_full_scan=force_full_scan)
+        except HarborError as exc:
+            if exc.code != ErrorCode.ALREADY_RUNNING:
+                raise
+            result = self._record_skipped_sync(account, exc)
         elapsed = int(time.monotonic() - started)
         LOGGER.info(
             f"同步结束：状态={result.status}；下载={result.downloaded_count}；"
             f"跳过={result.skipped_count}；失败={result.failed_count}；"
             f"用时={elapsed // 3600:02d}:{elapsed % 3600 // 60:02d}:{elapsed % 60:02d}"
         )
-        expires_at = self.protocol(account).session_expires_at()
-        if expires_at is not None:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            local_expiry = expires_at.astimezone(ZoneInfo(self.config.runtime.timezone))
-            remaining = max(0, math.ceil((expires_at - datetime.now(UTC)).total_seconds() / 86400))
-            LOGGER.info(
-                f"Apple 认证到期时间：{local_expiry:%Y-%m-%d %H:%M:%S}；剩余约 {remaining} 天"
-            )
+        if result.status != "SKIPPED_ALREADY_RUNNING":
+            expires_at = self.protocol(account).session_expires_at()
+            if expires_at is not None:
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=UTC)
+                local_expiry = expires_at.astimezone(ZoneInfo(self.config.runtime.timezone))
+                remaining = max(
+                    0,
+                    math.ceil((expires_at - datetime.now(UTC)).total_seconds() / 86400),
+                )
+                LOGGER.info(
+                    f"Apple 认证到期时间：{local_expiry:%Y-%m-%d %H:%M:%S}；剩余约 {remaining} 天"
+                )
         self._notify_sync(account, result)
         return result
+
+    def _record_skipped_sync(
+        self,
+        account: AccountConfig,
+        exc: HarborError,
+    ) -> SyncExecution:
+        run_id = self.repository.create_run(account.id)
+        self.repository.finish_run(
+            run_id,
+            status="SKIPPED_ALREADY_RUNNING",
+            error_code=exc.code.value,
+        )
+        self.repository.add_event(
+            run_id,
+            "SKIPPED_ALREADY_RUNNING",
+            str(exc),
+            severity="INFO",
+            payload={"error_code": exc.code.value},
+        )
+        LOGGER.info("已有账号操作正在运行，本次不重复启动")
+        return SyncExecution(
+            run_id,
+            "SKIPPED_ALREADY_RUNNING",
+            0,
+            0,
+            0,
+            0,
+            SyncPlan(),
+            exc.code.value,
+            str(exc),
+        )
 
     def _notify_auth_expiration(self, account: AccountConfig) -> None:
         protocol = self.protocol(account)

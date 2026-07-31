@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from icloudharbor.config.models import AccountConfig, AppConfig, RuntimeConfig
+from icloudharbor.config.models import AccountConfig, AppConfig, RuntimeConfig, ScheduleConfig
 from icloudharbor.observability.logging import configure_logging
 from icloudharbor.observability.startup import startup_summary
 
@@ -34,6 +34,7 @@ def test_startup_summary_is_readable_and_redacts_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account_config.destination.path = Path("/photos/personal")
+    account_config.sync.schedule = ScheduleConfig(interval="24h")
     monkeypatch.setenv("IH_PHOTOS_PATH", "/volume2/ceshi/icloudharbor")
 
     lines = startup_summary(app_config, account_config, Path("/config/config.yaml"))
@@ -43,3 +44,5 @@ def test_startup_summary_is_readable_and_redacts_account(
     assert "u***@example.com" in output
     assert "/volume2/ceshi/icloudharbor/personal" in output
     assert "Live Photo 尺寸=original" in output
+    assert "同步计划：每 24h" in output
+    assert "Cron" not in output

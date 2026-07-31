@@ -22,16 +22,18 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.3.0`，支持：
+当前版本为 `0.3.4`，支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
-- `icloudharbor setup` 以星号遮罩读取密码、完成认证、保存本地续期凭据并立即首次同步。
-- `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码。
-- Cron 或固定间隔调度、启动时同步、增量游标与定期全量扫描。
+- `icloudharbor setup` 以星号遮罩读取密码、完成认证并保存本地续期凭据，然后把首次同步
+  持久化交给容器后台并退出；下载过程统一显示在主容器日志。
+- `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码；成功后同样
+  请求后台立即同步。
+- 普通 Docker 参数用整数小时配置同步间隔；高级 YAML 支持 Cron、增量游标与定期全量扫描。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
 - 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
@@ -62,7 +64,8 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 2. 调整 `/config` 内运行目录的属主与权限。
 3. 如果 `/config/config.yaml` 不存在，执行 `icloudharbor config bootstrap`。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
-5. 调度器按 Cron/间隔触发同步，同一账号和图库最多运行一个任务。
+5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
+   最多运行一个认证或同步操作。
 
 一次同步依次经过：
 
@@ -85,7 +88,8 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
-- `.env.example`：包含首次启动必填 Apple ID 和可选企业微信 Docker 参数，不包含 Apple 密码。
+- `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
+  参数，不包含 Apple 密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
 - `.github/workflows/ci.yml`：Python 3.12/3.13 检查、amd64/arm64 镜像构建，以及版本标签
   触发的 Docker Hub 发布。
@@ -117,10 +121,10 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `download/postprocess.py`：文件权限、HEIC 转 JPEG 和 Synology Photos 索引触发。
 - `download/verifier.py`：大小与 SHA-256 校验。
 - `download/retry.py`：带随机抖动的指数退避。
-- `database/models.py`：SQLite 数据结构。
-- `database/repository.py`：账号、图库、资源、运行记录、游标和锁的数据访问。
+- `database/models.py`：SQLite 数据结构，包括跨进程同步请求的代次状态。
+- `database/repository.py`：账号、图库、资源、运行记录、游标、锁和同步请求的数据访问。
 - `database/session.py`：SQLite 连接、WAL、外键和完整性检查。
-- `scheduler/service.py`：Cron/间隔任务与启动时任务。
+- `scheduler/service.py`：Cron/间隔、启动时任务和进程内合并的立即任务。
 - `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥，以及崩溃残留租约恢复。
 - `notify/base.py`：通知事件路由和五种通知通道。
 - `observability/logging.py`：文本/JSON 结构化日志、第三方日志降噪和标准日志脱敏。
@@ -205,6 +209,9 @@ docker build .
 - 2026-07-30 的 0.3.0 参数精简：删除 11 个伪参数、合并 4 组重叠参数（photo_version→
   photo_size、interval→schedule、no_changes→success、umask→固定 0022），旧 `.env` 与
   `config.yaml` 自动迁移或警告忽略；108 项测试、Ruff 与严格 mypy 全部通过。
+- 2026-07-31 的 0.3.4 交互改进：认证命令通过 SQLite 请求代次把首次/续期同步交给 daemon，
+  下载日志统一进入主容器；新手同步参数恢复为纯数字小时，默认 24 小时并在启动时检查。
+  130 项测试通过，覆盖率 80%，Ruff、格式检查与严格 mypy 全部通过。
 - Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
 - 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
@@ -213,7 +220,86 @@ docker build .
 `protocol/pyicloud_adapter.py` 添加兼容和回归测试，不能把底层对象泄露到业务层。
 
 
-## 9.未完成的
-1：确定为什么我这边将代码推送到了github，github正常会自动生成hub docker最新版本的，但是我群晖拉取好像还是低版本。
-2、应该要参考icloupd一样，看看他的项目，如果验证码密码没有输入，容器 up -d后他是怎么等待用户输入docker exec -it icloudpd sync-icloud.sh --Initialise的，输入后又执行了什么操作？？？输入又账号秘密的情况下在此输入docker exec -it icloudpd sync-icloud.sh --Initialise又会怎么样，3、如果用户登录缓存过期了输入docker exec -it icloudpd reauth.sh
-又会怎么样。记录icloudp项目是怎么处理的
+## 9. 发布与 icloudpd 认证流程调查
+
+以下结论于 2026-07-31 核对，`icloudpd` 指
+[`boredazfcuk/docker-icloudpd`](https://github.com/boredazfcuk/docker-icloudpd)，源码提交为
+`e2d9aa01abe97f669fec6517cd44a251621d7560`，容器版本为 `1.0.1369_30-05-2026`，
+其中固定 `icloudpd 1.32.3`。
+
+### 9.1 GitHub 到 Docker Hub
+
+- `.github/workflows/ci.yml` 会在每次 push 和 PR 上测试及构建，但只有 Git ref 以
+  `refs/tags/v` 开头时才登录并推送 Docker Hub。普通 `git push` 不发布镜像。
+- `v0.3.3` 生成 `0.3.3`、`0.3`、`latest` 和 `sha-d741f2b` 四个标签。调查时四者均指向
+  清单摘要 `sha256:b289da7980cb2f4e50af635c681c095c54dfceb5ee1f3825f4a895c5fccc7f82`，
+  OCI 标签中的版本为 `0.3.3`、revision 为 `d741f2bd5a67a3855dd251f992a975d0e2e1b31b`；
+  amd64 和 arm64 均已发布。因此当时的群晖旧版本不是发布端仍为 0.3.2。
+- `latest` 只是可变标签。`docker compose up -d` 不负责查询远端更新，群晖下载新镜像后也不会
+  自动替换已经运行的旧容器。升级必须依次执行 `docker compose pull` 和
+  `docker compose up -d --force-recreate --remove-orphans`，再以容器内
+  `icloudharbor --version` 为准；Container Manager 页面可能仍显示旧创建时间或缓存信息。
+- 若 `docker compose config --images` 输出 `icloudharbor:local`，说明误用了
+  `docker-compose.build.yml`，运行的不是 Docker Hub 镜像。若私有仓库拉取失败，Docker
+  也可能继续保留旧本地镜像，应先 `docker login` 并检查 pull 输出。仍取得旧摘要时再排查
+  registry mirror 或代理缓存。
+- 发布时应先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，创建带说明的版本标签，
+  并只推送目标标签，例如 `git push origin v0.3.4`。不要使用 `git push --tags`：本地存在而
+  远端已不存在的旧标签可能重新触发发布并把 `latest` 回退。
+- 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
+  `0.3` 和 `sha-*` 标签。
+
+### 9.2 icloudpd 如何等待初始化
+
+- 容器的 `launcher.sh` 最终 `exec` 前台 `sync-icloud.sh`。它不是在主容器进程的标准输入上
+  等待密码或验证码，而是检查 `/config` 中的持久化文件。
+- 缺少 `/config/python_keyring/keyring_pass.cfg` 时，前台脚本每 5 秒检查一次，最多等待
+  30 分钟。另一个 `docker exec -it icloudpd sync-icloud.sh --Initialise` 进程负责交互并
+  写入 keyring；前台看到文件后继续。超过 30 分钟仍没有文件便退出，由 Docker restart
+  policy 重新启动后再次等待。
+- keyring 已有但 MFA Cookie 缺失时，前台同样每 5 秒轮询 Cookie 文件，最多 30 分钟；
+  Cookie 只有基础会话而没有 `X-APPLE-WEBAUTH-HSA-TRUST` 时则轮询该认证标志。初始化进程
+  完成后，前台自然解除等待并进入下载循环。
+- 所以它采用的是“两个进程通过 `/config` 文件交接”的方式，不是 `docker up -d` 后把同一个
+  交互终端挂起。后台进程只消费 keyring/Cookie，`docker exec -it` 进程负责生产它们。
+
+### 9.3 icloudpd 的 `--Initialise`
+
+- 没有 keyring 时，`--Initialise` 先执行 `icloud --username ...`，由 keyring 后端询问并保存
+  Apple 密码；然后把已有 Cookie/Session 移为备份，执行
+  `icloudpd --auth-only --cookie-directory /config`，按需询问 MFA 验证码并生成新 Cookie。
+  脚本只在 Cookie 含受信任会话标志时报告成功，然后退出；已等待的前台进程继续同步。
+- 已有 keyring 时再次运行 `--Initialise`，不会再次询问或替换 Apple 密码。它直接复用 keyring
+  中的密码，备份现有 Cookie/Session，并强制重新执行认证和生成 Cookie。若 Apple 密码已经
+  修改，应先运行 `sync-icloud.sh --Remove-Keyring`，再运行 `--Initialise`。
+- `--Initialise` 进程自身不进入长期下载循环，因为参数分支通过 `run_action` 在 Cookie 生成后
+  退出；真正的同步仍由容器前台已有进程执行。
+
+### 9.4 icloudpd 的 `reauth.sh`
+
+- `reauth.sh` 从 `/config/icloudpd.conf` 读取运行用户、Apple ID 和中国区认证开关，删除当前
+  Cookie 及 `.session`，再以配置的非 root 用户执行
+  `icloudpd --auth-only --cookie-directory /config`。正常情况下它复用 keyring 密码，只在
+  Apple 要求时交互读取 MFA 验证码；若 keyring 缺失，底层密码提供器仍可能回退到终端询问
+  密码。
+- 该脚本只重建认证文件，不直接重启容器，也不直接启动一次照片同步。前台若正在等待 Cookie
+  会在文件出现后继续；若正在同步间隔休眠，则在下一轮使用新 Cookie。
+- 前台发现 Cookie 已过期或格式无效时会删除 Cookie、等待 5 分钟并退出，随后依靠 restart
+  policy 重启并等待新的 Cookie。若在这 5 分钟休眠期间运行 `reauth.sh`，旧前台不会立即
+  同步，仍要等它退出并重启；重启后可发现新 Cookie。
+- 上游的成功状态不能直接照搬：`--Initialise` 的 `run_action` 不检查 `generate_cookie`
+  结果，认证失败也可能打印 `Container initialisation complete` 并以 0 退出；`reauth.sh`
+  同样没有在退出前验证新 Cookie。iCloudHarbor 必须继续以协议认证状态和实际访问检查作为
+  成功条件。
+
+### 9.5 与 iCloudHarbor 的对应关系
+
+- iCloudHarbor 的前台进程始终是独立调度器；没有凭据或 Session 时，容器日志会明确提示
+  `docker exec -it icloudharbor icloudharbor setup`。交互进程通过 SQLite 请求代次与后台
+  交接，不依赖主容器标准输入或强制重启。
+- iCloudHarbor 的 `setup` 与 icloudpd 重复执行 `--Initialise` 不同：每次都先清除旧 Session、
+  重新询问密码、覆盖本地 AES-256-GCM 凭据、完成 MFA、检查图库/相册，然后写入持久化请求
+  并退出。主 daemon 刷新协议对象后立即执行正式同步，因此全部下载日志进入 `docker logs`。
+- iCloudHarbor 的 `session renew` 对应 `reauth.sh`：清除旧 Session，复用保存的本地凭据，
+  Apple 要求时只询问验证码，成功后请求后台立即同步并退出。若本地凭据不存在，则要求改用
+  `setup`。

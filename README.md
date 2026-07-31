@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.3.3`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
+> 当前版本为 `0.3.4`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
 > 请保留其他可靠备份。
 
 ## 功能
@@ -19,7 +19,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 - 首次启动从 Docker `IH_*` 参数自动生成 `config.yaml`，无需手工创建。
 - 终端以 `*` 显示密码输入，不把密码放入 `.env`、Compose 或命令行参数。
 - 保存本地加密续期凭据；Session 过期后可运行 `session renew`。
-- 支持 Cron、固定间隔、启动时同步、增量游标和定期全量扫描。
+- 普通用户直接按小时设置同步频率；高级 YAML 仍支持 Cron、增量游标和定期全量扫描。
 - 支持个人/共享图库与相册包含、排除，并可用 ID 或名称选择。
 - 支持照片、视频、Live Photo、RAW/JPEG、原片、缩略图和编辑版。
 - 可保留 HEIC/HEIF 原片并额外生成 JPEG。
@@ -73,21 +73,24 @@ id -u
 id -g
 ```
 
-编辑 `.env`。首次启动唯一必填项是：
+编辑 `.env`。示例文件已经逐项写明用途，普通用户通常只需确认下面这些值：
 
 ```dotenv
 IH_APPLE_ID=your-account@example.com
-```
-
-其他参数不要整份复制，请从
-[`CONFIGURATION.md`](CONFIGURATION.md) 的完整参数表中按需添加。常见宿主机参数示例：
-
-```dotenv
+IH_CONFIG_PATH=./data/config
+IH_PHOTOS_PATH=./data/photos
 IH_PUID=1000
 IH_PGID=1000
 IH_TIMEZONE=Asia/Shanghai
+IH_REGION=auto
+IH_SYNC_INTERVAL=24
+IH_RUN_ON_START=true
+IH_DOWNLOAD_VIDEOS=true
+IH_DOWNLOAD_LIVE_PHOTOS=true
 ```
 
+`IH_SYNC_INTERVAL` 的数字就是小时，常用选择为 `6`、`12` 或 `24`，不需要写 Cron。
+所有开关只需填写 `true` 或 `false`。照片默认始终下载；视频和 Live Photo 默认也会下载。
 `IH_PUID` 和 `IH_PGID` 必须对配置目录和照片目录具有读写权限。必要时在宿主机调整属主：
 
 ```bash
@@ -114,6 +117,8 @@ docker login
 docker compose pull
 docker compose up -d
 docker compose ps
+docker exec icloudharbor icloudharbor --version
+docker logs --tail=50 icloudharbor
 ```
 
 首次启动会生成 `./data/config/config.yaml`。已有配置文件不会被覆盖；非空 `IH_*`
@@ -131,6 +136,10 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 docker exec -it icloudharbor icloudharbor setup
 ```
 
+`docker compose up -d` 已经脱离终端，不能直接读取密码和验证码。首次登录未完成时，容器
+日志会明确显示上面的认证命令。`docker exec -it` 启动独立的交互进程；认证完成后该命令
+立即退出，容器后台随即接手首次同步。
+
 程序会：
 
 1. 检查配置、SQLite、照片目录、挂载标记和剩余空间；
@@ -138,12 +147,18 @@ docker exec -it icloudharbor icloudharbor setup
 3. 在需要时显示验证码输入提示；
 4. 保存本地加密续期凭据；
 5. 验证已配置的 iCloud Photos 图库和相册可访问；
-6. 验证码通过后立即执行首次正式同步。
+6. 把首次同步交给容器后台，并结束当前认证命令。
 
 验证码必须在出现 `验证码:` 提示后输入。请勿把验证码直接当作 shell 命令输入。
 
-`setup` 会持续运行到首次同步结束，不需要再执行 `sync plan` 或 `sync run`。之后容器会按照
-`config.yaml` 中的调度设置自动同步；计划和手动同步命令只用于高级运维。
+认证命令退出后直接查看下载：
+
+```bash
+docker logs -f icloudharbor
+```
+
+首次同步和每个文件的“正在下载”都由主容器输出，不需要再执行 `sync plan` 或 `sync run`。
+之后默认在容器启动时检查一次，并按 `IH_SYNC_INTERVAL` 的小时数自动同步。
 
 ## 群晖示例
 
@@ -165,6 +180,8 @@ IH_PUID=1026
 IH_PGID=100
 IH_TIMEZONE=Asia/Shanghai
 IH_APPLE_ID=your-account@example.com
+IH_SYNC_INTERVAL=24
+IH_RUN_ON_START=true
 
 # 可选企业微信通知；启用时前四项必须填写
 IH_WECOM_ID=ww0000000000000000
@@ -203,6 +220,12 @@ docker exec -it icloudharbor icloudharbor session renew
 
 ```bash
 docker exec -it icloudharbor icloudharbor setup
+```
+
+`session renew` 成功后也会通知容器后台立即同步，然后结束交互命令。下载过程继续显示在：
+
+```bash
+docker logs -f icloudharbor
 ```
 
 清除 Session 不会删除保存的密码：
@@ -269,7 +292,8 @@ docker logs -f icloudharbor
 ```bash
 git pull --ff-only
 docker compose pull
-docker compose up -d --remove-orphans
+docker compose up -d --force-recreate --remove-orphans
+docker exec icloudharbor icloudharbor --version
 docker exec icloudharbor icloudharbor doctor
 ```
 
@@ -277,6 +301,31 @@ docker exec icloudharbor icloudharbor doctor
 并纳入安全备份。
 
 ## 故障排查
+
+### 拉取后仍显示旧版本
+
+先确认 Compose 实际使用生产镜像，然后显式拉取并重建容器：
+
+```bash
+docker compose config --images
+docker compose pull
+docker compose up -d --force-recreate --remove-orphans
+docker exec icloudharbor icloudharbor --version
+```
+
+`config --images` 应输出 `lwxcloud/icloudharbor:latest`。如果输出
+`icloudharbor:local`，说明启动时使用了仅供源码构建的 `docker-compose.build.yml`。
+
+若命令行版本已更新而群晖 Container Manager 页面仍显示旧信息，以容器内版本为准；页面可能
+显示旧的创建时间或缓存。若容器内仍是旧版，比较运行容器和本地 `latest` 的镜像 ID：
+
+```bash
+docker inspect icloudharbor --format '{{.Image}}'
+docker image inspect lwxcloud/icloudharbor:latest --format '{{.Id}}'
+```
+
+两者不一致表示只拉取了镜像但没有替换旧容器。私有仓库还应确认已执行 `docker login`；
+如果 pull 得到的仍是旧摘要，再检查群晖配置的 registry mirror 或代理缓存。
 
 ### 容器首次启动后退出
 

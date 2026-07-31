@@ -140,8 +140,8 @@ class ScheduleConfig(StrictModel):
     def exactly_one_schedule(self) -> ScheduleConfig:
         if bool(self.interval) == bool(self.cron):
             raise ValueError("schedule 必须且只能配置 interval 或 cron")
-        if self.interval:
-            parse_duration(self.interval)
+        if self.interval and parse_duration(self.interval) <= timedelta(0):
+            raise ValueError("同步间隔必须大于 0")
         return self
 
 
@@ -150,7 +150,7 @@ class SyncConfig(StrictModel):
     strategy: Literal["cursor", "full"] = "cursor"
     full_scan_interval: timedelta = timedelta(days=30)
     schedule: str | ScheduleConfig | None = None
-    run_on_start: bool = False
+    run_on_start: bool = True
     download_delay: Annotated[int, Field(ge=0, le=60)] = 0
 
     @field_validator("full_scan_interval", mode="before")

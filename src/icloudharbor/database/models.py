@@ -141,6 +141,19 @@ class SyncRunRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
 
 
+class SyncRequestRow(Base):
+    __tablename__ = "sync_requests"
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    requested_generation: Mapped[int] = mapped_column(BigInteger)
+    handled_generation: Mapped[int] = mapped_column(BigInteger, default=0)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class SyncEventRow(Base):
     __tablename__ = "sync_events"
 

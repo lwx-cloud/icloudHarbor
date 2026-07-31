@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -11,6 +12,7 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 
 from icloudharbor.config.models import MOUNTED_MARKER, AppConfig
+from icloudharbor.config.validation import parse_duration
 
 DEFAULT_CONFIG_PATH = Path("/config/config.yaml")
 
@@ -56,6 +58,23 @@ def _parse_csv(value: str) -> list[str]:
 
 def _parse_csv_lower(value: str) -> list[str]:
     return [item.lower() for item in _parse_csv(value)]
+
+
+def _parse_sync_interval(value: str) -> str:
+    normalized = value.strip().lower()
+    if re.fullmatch(r"\d+", normalized):
+        hours = int(normalized)
+        if not 1 <= hours <= 168:
+            raise ValueError("IH_SYNC_INTERVAL 必须是 1 到 168 的整数小时；常用值为 6、12、24")
+        return f"{hours}h"
+    try:
+        duration = parse_duration(normalized)
+    except ValueError as exc:
+        raise ValueError("IH_SYNC_INTERVAL 直接填写小时整数，例如 6、12 或 24") from exc
+    if duration.total_seconds() <= 0:
+        raise ValueError("IH_SYNC_INTERVAL 必须大于 0 小时")
+    LOGGER.warning(f"IH_SYNC_INTERVAL={value} 是兼容写法；新配置直接填写小时整数，例如 12")
+    return normalized
 
 
 RUNTIME_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
@@ -241,8 +260,8 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                     "mode": "backup",
                     "strategy": "cursor",
                     "full_scan_interval": "30d",
-                    "schedule": "0 3 * * *",
-                    "run_on_start": False,
+                    "schedule": "24h",
+                    "run_on_start": True,
                 },
             }
         ],
@@ -266,13 +285,13 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
     account_names = {
         name for name, _, _ in ACCOUNT_ENV_OVERRIDES if _environment_value(name) is not None
     }
-    schedule = _environment_value("IH_SCHEDULE")
-    legacy_interval = _environment_value("IH_SYNC_INTERVAL")
-    if schedule is not None and legacy_interval is not None:
+    advanced_schedule = _environment_value("IH_SCHEDULE")
+    sync_interval = _environment_value("IH_SYNC_INTERVAL")
+    if advanced_schedule is not None and sync_interval is not None:
         raise ValueError("IH_SCHEDULE 和 IH_SYNC_INTERVAL 不能同时设置")
     legacy_version = _environment_value("IH_PHOTO_VERSION")
-    if schedule is not None or legacy_interval is not None or legacy_version is not None:
-        account_names.add("IH_SCHEDULE")
+    if advanced_schedule is not None or sync_interval is not None or legacy_version is not None:
+        account_names.add("IH_SYNC_INTERVAL")
 
     if account_names:
         accounts = data.get("accounts")
@@ -283,11 +302,11 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
             raise ValueError("YAML accounts[0] 必须是对象")
         _apply_mapping(account, ACCOUNT_ENV_OVERRIDES)
         sync = _mapping(account, "sync")
-        if schedule is not None:
-            sync["schedule"] = schedule
-        elif legacy_interval is not None:
-            LOGGER.warning("环境变量 IH_SYNC_INTERVAL 已并入 IH_SCHEDULE（直接填写 6h 等时长）")
-            sync["schedule"] = legacy_interval
+        if sync_interval is not None:
+            sync["schedule"] = _parse_sync_interval(sync_interval)
+        elif advanced_schedule is not None:
+            LOGGER.warning("IH_SCHEDULE 是高级兼容参数；新配置建议使用 IH_SYNC_INTERVAL=24")
+            sync["schedule"] = advanced_schedule
         if legacy_version is not None and _environment_value("IH_PHOTO_SIZE") is None:
             LOGGER.warning("环境变量 IH_PHOTO_VERSION 已并入 IH_PHOTO_SIZE")
             sizes = _PHOTO_VERSION_SIZES.get(legacy_version.lower())

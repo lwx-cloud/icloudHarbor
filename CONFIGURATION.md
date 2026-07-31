@@ -2,73 +2,51 @@
 
 配置只需记住一句话：
 
-> **`.env` 里只填 Apple ID，其他全部有默认值。想改什么，从下表查到变量名，加进 `.env` 或 `config.yaml` 即可。**
+> **复制 `.env.example`，填写 Apple ID 和群晖路径；同步间隔直接填小时数字，开关只填 `true` 或 `false`。**
 
 - 首次启动用 `IH_APPLE_ID` 自动生成 `/config/config.yaml`；
 - 优先级：非空 `IH_*` 环境变量 > `config.yaml` > 默认值；
 - Apple 密码、验证码、Cookie 永远不进 `.env`，由 `icloudharbor setup` 以星号遮罩交互输入；
-- 布尔值写法：`true/false`、`yes/no`、`on/off`、`1/0` 均可。
+- 新配置中的布尔值统一写 `true` 或 `false`；旧部署的 `yes/no`、`on/off`、`1/0` 仍兼容。
 
-**目录**：[参数总表](#一参数总表) · [三分钟上手](#二三分钟上手) · [常见场景](#三常见场景) · [config.yaml 示例](#四-configyaml-完整示例) · [通知渠道](#五通知渠道配置) · [文件名模板](#六文件名模板) · [管理命令](#七常用管理命令) · [FAQ](#八常见问题) · [安全](#九安全说明) · [icloudpd 迁移](#十从-docker-icloudpd-迁移)
+**目录**：[新手参数](#一新手参数) · [三分钟上手](#二三分钟上手) · [常见场景](#三常见场景) · [config.yaml 示例](#四-configyaml-完整示例) · [通知渠道](#五通知渠道配置) · [文件名模板](#六文件名模板) · [管理命令](#七常用管理命令) · [FAQ](#八常见问题) · [安全](#九安全说明) · [icloudpd 迁移](#十从-docker-icloudpd-迁移)
 
 ---
 
-## 一、参数总表
+## 一、新手参数
 
-按使用顺序排列，越靠上越常用。只有 `IH_APPLE_ID` 必填；启用企业微信时其四个参数必须同时填写。
+`.env.example` 已经包含下面这些参数和中文说明，可以直接复制使用。只有 `IH_APPLE_ID`
+必填；路径、UID/GID 和时区按群晖实际情况修改。
 
 | 变量名 | 默认值 | 可选值 | 说明 |
 | --- | --- | --- | --- |
 | `IH_APPLE_ID` | 无（**首次启动必填**） | Apple Account 邮箱 | 生成首份 `config.yaml` 的唯一必填项。 |
+| `IH_CONTAINER_NAME` | `icloudharbor` | Docker 容器名 | 后续 `docker logs` 和 `docker exec` 使用的名称。 |
 | `IH_CONFIG_PATH` | `./data/config` | 宿主机路径 | Compose 变量：配置目录，挂载到 `/config`；必须持久化并按敏感数据保护。 |
 | `IH_PHOTOS_PATH` | `./data/photos` | 宿主机路径 | Compose 变量：照片目录，挂载到 `/photos`。 |
 | `IH_PUID` | `1000` | 大于 `0` 的 UID | 业务进程和新文件的用户 ID；群晖用 `id 用户名` 查询。 |
 | `IH_PGID` | `1000` | 大于 `0` 的 GID | 业务进程和新文件的组 ID。 |
-| `IH_TIMEZONE` | `UTC` | IANA 时区，如 `Asia/Shanghai` | 同时控制容器时区、日志时间和调度时间。 |
-| `IH_LOG_LEVEL` | `INFO` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | `DEBUG` 才输出资源 ID、断点等内部信息。 |
-| `IH_LOG_FORMAT` | `text` | `text`、`json` | NAS 控制台用 `text`，日志平台用 `json`。 |
-| `IH_ACCOUNT_ID` | `personal` | 字母/数字开头，后接字母数字、`_`、`-`，最长 64 | 数据库中的稳定账号 ID，部署后不要改。 |
-| `IH_ACCOUNT_NAME` | `我的 iCloud` | 任意非空文本 | 日志和通知中显示的名称。 |
-| `IH_REGION` | `auto` | `auto`、`global`、`china` | 中国大陆账号建议 `china`；`auto` 复用 Session 区域。 |
-| `IH_LIBRARIES` | `root` | 逗号分隔的图库 ID/名称 | 下载一个或多个可访问图库；用 `libraries list` 查准确值。 |
-| `IH_MINIMUM_FREE_SPACE` | `10GB` | 字节数或 `10GB`、`2GiB` | 下载后必须保留的最小可用空间。 |
-| `IH_DIRECTORY_PERMISSIONS` | 空（默认 `755`） | `750`、`0750`、`0o750` | 非空时强制设置下载目录权限。 |
-| `IH_FILE_PERMISSIONS` | 空（默认 `644`） | `640`、`0640`、`0o640` | 非空时强制设置下载文件和生成 JPEG 的权限。 |
-| `IH_SYNOLOGY_PHOTOS_APP_FIX` | `false` | `true`、`false` | 下载后 touch 文件，触发 Synology Photos 索引。 |
+| `IH_TIMEZONE` | `Asia/Shanghai`（示例） | IANA 时区 | 同时控制容器、日志和调度时间。 |
+| `IH_REGION` | `auto` | `auto`、`global`、`china` | 保持 `auto`；中国大陆账号认证失败时再改 `china`。 |
+| `IH_SYNC_INTERVAL` | `24` | `1`–`168` 的整数小时 | 数字就是小时；常用选择为 `6`、`12`、`24`，无需 Cron。 |
+| `IH_RUN_ON_START` | `true` | `true`、`false` | 容器启动后立即检查一次，推荐保持开启。 |
 | `IH_DOWNLOAD_VIDEOS` | `true` | `true`、`false` | 下载普通视频。 |
 | `IH_DOWNLOAD_LIVE_PHOTOS` | `true` | `true`、`false` | 保留 Live Photo 的图片和视频资源。 |
-| `IH_PHOTO_SIZE` | 空（等同 `original`） | `original`、`medium`、`thumb`、`adjusted`、`alternative`，可逗号组合 | 要编辑版填 `original,adjusted`；要 RAW 伴随资源加 `alternative`。 |
-| `IH_LIVE_PHOTO_SIZE` | `original` | `original`、`medium`、`thumb` | Live Photo 图片和视频伴随资源尺寸。 |
-| `IH_RAW_MODE` | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | RAW/JPEG 伴随资源策略。 |
 | `IH_CONVERT_HEIC_TO_JPEG` | `false` | `true`、`false` | 保留 HEIC 原片并额外生成 JPEG；永不覆盖已有 JPEG。 |
-| `IH_JPEG_PATH` | 空（与 HEIC 同目录） | 容器内路径 | JPEG 单独输出目录；设到 `/photos` 外需额外挂载持久化卷。 |
-| `IH_JPEG_QUALITY` | `100` | `0`–`100` | 生成 JPEG 的质量。 |
+| `IH_SYNOLOGY_PHOTOS_APP_FIX` | `false` | `true`、`false` | 下载后触发 Synology Photos 索引兼容处理。 |
 | `IH_ALBUMS` | 空（全部） | 逗号分隔的相册 ID/名称 | 只扫描指定相册；用 `albums list` 查准确值。 |
 | `IH_EXCLUDE_ALBUMS` | 空 | 逗号分隔的相册 ID/名称 | 排除指定相册；不能与包含列表重复。 |
-| `IH_CREATED_AFTER` | 空 | 带时区的 ISO 8601 时间 | 只下载不早于此时间的项目。 |
-| `IH_CREATED_BEFORE` | 空 | 带时区的 ISO 8601 时间 | 只下载不晚于此时间的项目；不能早于起始时间。 |
-| `IH_FAVORITES_ONLY` | `false` | `true`、`false` | 只下载收藏项目。 |
-| `IH_INCLUDE_HIDDEN` | `false` | `true`、`false` | 包含隐藏项目。 |
 | `IH_RECENT_ONLY` | 空（全部） | 大于 `0` 的整数 | 只处理最近加入的 N 个项目。 |
-| `IH_UNTIL_FOUND` | 空（全部） | 大于 `0` 的整数 | 连续遇到 N 个已完整存在的项目后停止计划。 |
-| `IH_FOLDER_STRUCTURE` | `{created:%Y/%m/%d}` | 相对路径模板，字段见[第六章](#六文件名模板) | 按拍摄时间创建目录；不能用绝对路径或 `..`。 |
-| `IH_FILENAME_TEMPLATE` | `{original_name}` | 文件名模板，不能含 `/`、`\` | 文件名规则。 |
-| `IH_CONFLICT_POLICY` | `suffix_asset_id` | `suffix_asset_id`、`always_asset_id`、`timestamp`、`error` | 同名文件处理方式。 |
-| `IH_SCHEDULE` | `0 3 * * *` | 五段 Cron 或 `6h`、`12h`、`1d` 等时长 | 同步计划；两种写法自动识别。 |
-| `IH_RUN_ON_START` | `false` | `true`、`false` | 容器启动后立即同步一次。 |
-| `IH_DOWNLOAD_DELAY` | `0` | `0`–`60` 分钟 | 延迟首次执行，错开多个容器；Cron 时间不受影响。 |
-| `IH_SYNC_STRATEGY` | `cursor` | `cursor`、`full` | 增量游标或每次全量扫描。 |
-| `IH_FULL_SCAN_INTERVAL` | `30d` | `30d`、`12h` 等时长 | 增量模式下强制全量校准的间隔。 |
-| `IH_DOWNLOAD_CONCURRENCY` | `2` | `1`–`8` | 并发下载数；Apple 限流或 NAS 较弱时保持 `2`。 |
-| `IH_DOWNLOAD_TIMEOUT` | `300` | `1`–`3600` 秒 | 单次 HTTP 下载超时。 |
-| `IH_MAX_RETRIES` | `5` | `0`–`20` | 每个资源的额外重试次数。 |
-| `IH_NOTIFICATION_TITLE` | `iCloudHarbor` | 任意非空文本 | 通知标题前缀。 |
-| `IH_SILENT_NOTIFICATIONS` | `false` | `true`、`false` | Bark/Telegram/Webhook 低打扰发送；企业微信无等价开关。 |
-| `IH_NOTIFY_STARTUP` | `false` | `true`、`false` | 容器启动时通知。 |
-| `IH_NOTIFY_SUCCESS` | `true` | `true`、`false` | 每次同步成功都通知（包括无变化），保证任务结束必有结果消息。 |
-| `IH_NOTIFY_FAILURE` | `true` | `true`、`false` | 失败、部分失败、存储不足等通知。 |
-| `IH_NOTIFY_AUTH_REQUIRED` | `true` | `true`、`false` | 认证临期或需重新认证时通知。 |
-| `IH_NOTIFICATION_DAYS` | `7` | `1`–`30` | 认证到期前几天开始提醒，每天最多一次。 |
+
+照片本身始终下载，没有需要开启的开关。`IH_ALBUMS`、`IH_EXCLUDE_ALBUMS` 和
+`IH_RECENT_ONLY` 默认保持注释即可。
+
+### 企业微信（可选）
+
+不用企业微信时整段保持注释。启用时前四项必须同时填写：
+
+| 变量名 | 默认值 | 可选值 | 说明 |
+| --- | --- | --- | --- |
 | `IH_WECOM_ID` | 无（启用企业微信时必填） | 企业 ID（CORPID） | 对应 icloudpd `wecom_id`。 |
 | `IH_WECOM_SECRET` | 无（启用企业微信时必填） | 企业应用 Secret | 启动时写入权限 `0600` 的密钥文件，不留在 YAML；对应 `wecom_secret`。 |
 | `IH_WECOM_AGENT_ID` | 无（启用企业微信时必填） | 正整数 | 企业应用 Agent ID；对应 `agentid`。 |
@@ -81,6 +59,22 @@
 | `MEDIA_ID_WARNING` | 空 | 企业微信素材 ID | 同步失败/认证失效通知封面。 |
 | `MEDIA_ID_EXPIRATION` | 空 | 企业微信素材 ID | 认证临期通知封面。 |
 
+### 高级配置
+
+下面的环境变量继续兼容旧部署，但新用户通常不需要。需要这些能力时，建议在
+`config.yaml` 中按[完整示例](#四-configyaml-完整示例)修改：
+
+| 类别 | 兼容的环境变量 | 用途 |
+| --- | --- | --- |
+| 日志与账号 | `IH_LOG_LEVEL`、`IH_LOG_FORMAT`、`IH_ACCOUNT_ID`、`IH_ACCOUNT_NAME`、`IH_LIBRARIES` | 调试日志、多图库和稳定内部 ID。 |
+| 存储权限 | `IH_MINIMUM_FREE_SPACE`、`IH_DIRECTORY_PERMISSIONS`、`IH_FILE_PERMISSIONS` | 空间保留量及 POSIX 权限。 |
+| 媒体版本 | `IH_PHOTO_SIZE`、`IH_LIVE_PHOTO_SIZE`、`IH_RAW_MODE`、`IH_JPEG_PATH`、`IH_JPEG_QUALITY` | 缩略图、编辑版、RAW 和 JPEG 高级策略。 |
+| 高级筛选 | `IH_CREATED_AFTER`、`IH_CREATED_BEFORE`、`IH_FAVORITES_ONLY`、`IH_INCLUDE_HIDDEN`、`IH_UNTIL_FOUND` | 日期、收藏、隐藏和提前停止。 |
+| 命名 | `IH_FOLDER_STRUCTURE`、`IH_FILENAME_TEMPLATE`、`IH_CONFLICT_POLICY` | 目录模板、文件名和重名策略。 |
+| 调度 | `IH_SCHEDULE`、`IH_DOWNLOAD_DELAY`、`IH_SYNC_STRATEGY`、`IH_FULL_SCAN_INTERVAL` | Cron 兼容入口、错峰和扫描策略。 |
+| 下载 | `IH_DOWNLOAD_CONCURRENCY`、`IH_DOWNLOAD_TIMEOUT`、`IH_MAX_RETRIES` | 并发、超时和重试。 |
+| 通知 | `IH_NOTIFICATION_TITLE`、`IH_SILENT_NOTIFICATIONS`、`IH_NOTIFY_STARTUP`、`IH_NOTIFY_SUCCESS`、`IH_NOTIFY_FAILURE`、`IH_NOTIFY_AUTH_REQUIRED`、`IH_NOTIFICATION_DAYS` | 通知显示和事件开关。 |
+
 注意事项：
 
 - 非空 `IH_*` 每次启动都会覆盖 YAML；从 `.env` 删掉变量后，之前写入 `config.yaml` 的值仍保留，需要同时改 YAML。
@@ -88,9 +82,15 @@
 - 为兼容早期版本，容器仍接受小写 `notification_days`，新部署统一用 `IH_NOTIFICATION_DAYS`。
 - 相册、`recent_only`、`until_found` 扫描不会推进完整图库游标——以后移除这些限制时会安全地重新全量扫描，不会漏掉旧项目。
 
-**0.3.0 删除的参数**：`IH_PHOTO_VERSION`（并入 `IH_PHOTO_SIZE`）、`IH_SYNC_INTERVAL`（并入 `IH_SCHEDULE`）、`IH_VERIFY_HASH`、`IH_KEEP_PARTIAL`、`IH_CHUNK_SIZE`、`IH_MOUNTED_MARKER`、`IH_DOWNLOAD_PHOTOS`、`IH_KEEP_UNICODE`、`IH_UMASK`、`IH_NOTIFY_NO_CHANGES`（并入 `IH_NOTIFY_SUCCESS`）、`MEDIA_ID_DELETE`。旧 `.env`/`config.yaml` 里的这些设置会在启动时自动迁移或忽略并给出警告，不会导致启动失败。
+**0.3.0 删除的参数**：`IH_PHOTO_VERSION`（并入 `IH_PHOTO_SIZE`）、`IH_VERIFY_HASH`、
+`IH_KEEP_PARTIAL`、`IH_CHUNK_SIZE`、`IH_MOUNTED_MARKER`、`IH_DOWNLOAD_PHOTOS`、
+`IH_KEEP_UNICODE`、`IH_UMASK`、`IH_NOTIFY_NO_CHANGES`（并入 `IH_NOTIFY_SUCCESS`）、
+`MEDIA_ID_DELETE`。旧 `.env`/`config.yaml` 里的这些设置会自动迁移或忽略并给出警告。
 
 **0.3.3 变更**：移除 `IH_DESTINATION`，下载目录固定为 `/photos`（`IH_PHOTOS_PATH` 指哪下哪）；Live Photo 同版本去重；`jpeg_quality` 默认 100；认领已有文件；精简启动日志。
+
+**0.3.4 变更**：重新提供面向普通用户的 `IH_SYNC_INTERVAL`，纯数字按小时解释；新部署默认
+每 24 小时同步并在容器启动后立即检查。旧的 `12h`、`1d` 以及 `IH_SCHEDULE`/Cron 继续兼容。
 
 ### 仅 `config.yaml` 可用的参数
 
@@ -129,9 +129,11 @@ IH_APPLE_ID=your-account@example.com
 docker compose pull
 docker compose up -d
 docker compose exec icloudharbor icloudharbor setup
+docker compose logs -f icloudharbor
 ```
 
-`setup` 会读取密码 → 输入双重认证验证码 → 自动执行首次同步。完成。
+`setup` 会读取密码 → 输入双重认证验证码 → 通知容器后台立即同步 → 结束交互命令。
+下载过程继续显示在主容器日志中。
 
 默认路径对应关系：
 
@@ -166,13 +168,17 @@ chown -R 99:100 /volume1/docker/icloudharbor /volume2/photos/iCloud/personal
 ### 场景 2：改同步频率
 
 ```dotenv
-# 固定间隔或 Cron，同一个参数
-IH_SCHEDULE=6h
-# 或
-IH_SCHEDULE=0 */6 * * *
+# 数字就是小时，常用选择：6、12、24
+IH_SYNC_INTERVAL=12
 ```
 
 低于 12 小时的频率可能触发 Apple 限流，不建议更密。
+
+必须固定在某个钟点运行时，才需要在高级 `config.yaml` 中使用 Cron：
+
+```yaml
+schedule: "0 3 * * *"
+```
 
 ### 场景 3：先试试水，只下载最近 100 个文件
 
@@ -208,7 +214,7 @@ IH_SYNOLOGY_PHOTOS_APP_FIX=true
 
 ### 场景 7：我要通知
 
-**企业微信**（最简单，全走 `.env`，参数见[第一章](#一参数总表) `IH_WECOM_*`）：
+**企业微信**（最简单，全走 `.env`，参数见[第一章](#一新手参数) `IH_WECOM_*`）：
 
 ```dotenv
 IH_WECOM_ID=ww0000000000000000
@@ -291,8 +297,8 @@ accounts:
       mode: backup            # 只能是 backup，禁止镜像删除
       strategy: cursor
       full_scan_interval: 30d
-      schedule: "0 3 * * *"   # 也可直接写时长：schedule: 6h
-      run_on_start: false
+      schedule: 24h
+      run_on_start: true
       download_delay: 0
 
     download:
@@ -479,7 +485,7 @@ docker compose exec icloudharbor icloudharbor healthcheck
 | Unicode 文件名 | `keep_unicode=false` | 固定保留 | 中文文件名始终保留，无开关。 |
 | 启动通知 | `startup_notification=true` | `IH_NOTIFY_STARTUP=false` | 默认相反。 |
 | 文件夹结构 | `{:%Y/%m/%d}` | `{created:%Y/%m/%d}` | 效果一致，字段名更明确。 |
-| 同步频率 | `download_interval=86400` | `IH_SCHEDULE`（Cron 或时长） | 都是一天一次；你可用任意 Cron 或间隔。 |
+| 同步频率 | `download_interval=86400` | `IH_SYNC_INTERVAL=24` | 数字直接表示小时；高级 YAML 仍可用 Cron。 |
 | 挂载标记 | `.mounted` | `.icloudharbor-mounted` | 文件名不同，需重新创建。 |
 | 区域开关 | `icloud_china` + `auth_china` 两个 | `IH_REGION=china` 一个 | 更简洁。 |
 

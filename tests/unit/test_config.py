@@ -123,7 +123,7 @@ def test_environment_override_supports_common_docker_parameters(
     monkeypatch.setenv("IH_RECENT_ONLY", "500")
     monkeypatch.setenv("IH_UNTIL_FOUND", "20")
     monkeypatch.setenv("IH_FOLDER_STRUCTURE", "{created:%Y/%m}")
-    monkeypatch.setenv("IH_SCHEDULE", "12h")
+    monkeypatch.setenv("IH_SYNC_INTERVAL", "12")
     monkeypatch.setenv("IH_DOWNLOAD_DELAY", "15")
     monkeypatch.setenv("IH_DOWNLOAD_CONCURRENCY", "4")
     monkeypatch.setenv("IH_NOTIFICATION_TITLE", "家庭 iCloud")
@@ -175,7 +175,7 @@ def test_environment_override_rejects_ambiguous_schedule(
         encoding="utf-8",
     )
     monkeypatch.setenv("IH_SCHEDULE", "0 3 * * *")
-    monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
+    monkeypatch.setenv("IH_SYNC_INTERVAL", "12")
 
     with pytest.raises(ValueError, match="不能同时设置"):
         load_config(path)
@@ -274,7 +274,7 @@ def test_bootstrap_config_generates_initial_yaml_from_docker_parameters(
     monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
     monkeypatch.setenv("IH_REGION", "china")
     monkeypatch.setenv("IH_DOWNLOAD_VIDEOS", "false")
-    monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
+    monkeypatch.setenv("IH_SYNC_INTERVAL", "12")
 
     config, created = bootstrap_config(path)
 
@@ -284,7 +284,20 @@ def test_bootstrap_config_generates_initial_yaml_from_docker_parameters(
     assert config.accounts[0].region == "china"
     assert config.accounts[0].destination.path == Path("/photos")
     assert config.accounts[0].media.videos is False
-    assert config.accounts[0].sync.schedule
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
+    assert config.accounts[0].sync.run_on_start is True
+
+
+def test_bootstrap_defaults_to_24_hour_interval_and_startup_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
+
+    config, _ = bootstrap_config(tmp_path / "config.yaml")
+
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="24h")
+    assert config.accounts[0].sync.run_on_start is True
 
 
 def test_bootstrap_config_never_overwrites_existing_yaml(
@@ -384,7 +397,7 @@ def test_legacy_photo_version_original_keeps_default_sizes(
     assert config.accounts[0].media.photo_size == ["original"]
 
 
-def test_legacy_environment_variables_still_work(
+def test_sync_interval_keeps_duration_compatibility(
     tmp_path: Path,
     account_config: AccountConfig,
     monkeypatch: pytest.MonkeyPatch,
@@ -395,12 +408,81 @@ def test_legacy_environment_variables_still_work(
         encoding="utf-8",
     )
     monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
-    monkeypatch.setenv("IH_PHOTO_VERSION", "both")
 
     config = load_config(path)
 
     assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
-    assert config.accounts[0].media.photo_size == ["original", "adjusted"]
+
+
+@pytest.mark.parametrize("hours", [6, 12, 24])
+def test_sync_interval_plain_number_means_hours(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    hours: int,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_SYNC_INTERVAL", str(hours))
+
+    config = load_config(path)
+
+    assert config.accounts[0].sync.schedule == ScheduleConfig(interval=f"{hours}h")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "often"])
+def test_sync_interval_rejects_values_that_are_not_positive_integer_hours(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_SYNC_INTERVAL", value)
+
+    with pytest.raises(ValueError, match="IH_SYNC_INTERVAL"):
+        load_config(path)
+
+
+def test_advanced_cron_environment_variable_remains_compatible(
+    tmp_path: Path,
+    account_config: AccountConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IH_SCHEDULE", "0 3 * * *")
+
+    config = load_config(path)
+
+    assert config.accounts[0].sync.schedule == "0 3 * * *"
+
+
+def test_explicit_run_on_start_false_is_preserved(
+    tmp_path: Path,
+    account_config: AccountConfig,
+) -> None:
+    path = tmp_path / "config.yaml"
+    payload = account_config.model_dump(mode="json")
+    payload["sync"]["run_on_start"] = False
+    path.write_text(
+        yaml.safe_dump({"version": 1, "accounts": [payload]}),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.accounts[0].sync.run_on_start is False
 
 
 def test_removed_environment_variables_are_ignored_not_fatal(

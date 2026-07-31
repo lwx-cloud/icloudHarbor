@@ -4,7 +4,7 @@ services:
     container_name: "${IH_CONTAINER_NAME:-icloudharbor}"
     restart: unless-stopped
 
-    # `.env` 保持精简；需要的可选参数直接按 CONFIGURATION.md 追加。
+    # `.env.example` 已列出新手常用项；高级能力见 CONFIGURATION.md。
     env_file:
       - .env
 
