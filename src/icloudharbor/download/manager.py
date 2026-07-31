@@ -61,7 +61,11 @@ class DownloadManager:
         for task in plan.skips:
             source = self.destination / task.relative_path
             try:
-                self.postprocessor.process_existing(source, task.relative_path)
+                self.postprocessor.process_existing(
+                    source,
+                    task.relative_path,
+                    task.asset.created_at,
+                )
             except (OSError, ValueError) as exc:
                 path = display_download_path(
                     self.account.destination.path,
@@ -120,7 +124,11 @@ class DownloadManager:
             try:
                 size = self._download_once(task)
                 target = (self.destination / task.relative_path).resolve()
-                self.postprocessor.process_download(target, task.relative_path)
+                self.postprocessor.process_download(
+                    target,
+                    task.relative_path,
+                    task.asset.created_at,
+                )
                 return DownloadOutcome(task, True, bytes_downloaded=size)
             except (HarborError, ProtocolError, OSError) as exc:
                 last_error = exc

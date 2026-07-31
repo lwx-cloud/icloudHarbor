@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,8 +10,10 @@ from tests.conftest import FakeProtocol, make_asset
 
 from icloudharbor.application import HarborApplication
 from icloudharbor.config.models import AppConfig
-from icloudharbor.notify.base import DeliveryResult, NotificationType
+from icloudharbor.notify.base import DeliveryResult, NotificationEvent, NotificationType
 from icloudharbor.observability.paths import display_download_path
+from icloudharbor.photos.engine import SyncExecution
+from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.models import (
     AssetQuery,
     RemoteAlbum,
@@ -27,17 +30,20 @@ def test_first_run_downloads_and_second_run_is_idempotent(
     fake = FakeProtocol([asset], content)
     application = HarborApplication(app_config, protocol_factory=lambda _: fake)
     account = app_config.accounts[0]
+    target = account.destination.path / "2026/07/29/IMG_0001.JPG"
 
     with capture_logs() as logs:
         first = application.run_sync(account)
+        assert target.stat().st_mtime == asset.created_at.timestamp()
+        os.utime(target, None)
         second = application.run_sync(account, force_full_scan=True)
 
-    target = account.destination.path / "2026/07/29/IMG_0001.JPG"
     assert first.status == "COMPLETED"
     assert first.downloaded_count == 1
     assert target.read_bytes() == content["resource-1"]
     assert second.downloaded_count == 0
     assert second.skipped_count == 1
+    assert target.stat().st_mtime == asset.created_at.timestamp()
     assert fake.calls.count("open_resource:resource-1") == 1
     events = [entry["event"] for entry in logs]
     assert f"正在下载：{target.as_posix()}" in events
@@ -113,7 +119,57 @@ def test_notification_title_is_configurable(
 
     application.run_sync(app_config.accounts[0])
 
-    assert "家庭相册 同步完成" in titles
+    assert "家庭相册 已是最新" in titles
+
+
+def test_sync_notification_uses_human_readable_summary(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    events: list[NotificationEvent] = []
+    monkeypatch.setattr(application.notifier, "send", lambda event: events.append(event) or [])
+    result = SyncExecution(
+        "run-id",
+        "COMPLETED",
+        3,
+        12,
+        0,
+        1_572_864,
+        SyncPlan(),
+    )
+
+    application._notify_sync(app_config.accounts[0], result)
+
+    assert events[0].title == "iCloudHarbor 同步完成"
+    assert events[0].message == (
+        "账号：测试图库\n本次下载：3 个文件\n下载数据：1.5 MB\n本地已有：12 个文件"
+    )
+    assert "COMPLETED" not in events[0].message
+
+
+def test_failed_sync_notification_explains_mount_problem(
+    app_config: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    events: list[NotificationEvent] = []
+    monkeypatch.setattr(application.notifier, "send", lambda event: events.append(event) or [])
+    result = SyncExecution(
+        "run-id",
+        "FAILED",
+        0,
+        0,
+        0,
+        0,
+        SyncPlan(),
+        "MOUNT_MISSING",
+    )
+
+    application._notify_sync(app_config.accounts[0], result)
+
+    assert events[0].title == "iCloudHarbor 同步失败"
+    assert events[0].message == ("账号：测试图库\n照片目录未正确挂载，或缺少挂载标记文件。")
 
 
 def test_dry_run_does_not_create_formal_or_partial_file(

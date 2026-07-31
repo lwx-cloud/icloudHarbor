@@ -11,10 +11,16 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 当前版本为 `0.3.4`。已经完成真实双重认证与下载验证，但 Apple 私有接口可能随时变化；
-> 请保留其他可靠备份。
+> 本文档对应源码版本 `0.3.5`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
+> 随时变化；请保留其他可靠备份。
 
-## 功能
+[快速开始](#快速开始) · [群晖部署](#群晖部署示例) · [认证续期](#认证续期与密码) ·
+[完整配置](CONFIGURATION.md) · [更新](#更新) · [故障排查](#故障排查)
+
+本文中的 Compose 命令都应在仓库目录执行，并使用固定的服务名 `icloudharbor`。即使修改了
+`IH_CONTAINER_NAME`，这些命令也不需要跟着修改。
+
+## 核心能力
 
 - 首次启动从 Docker `IH_*` 参数自动生成 `config.yaml`，无需手工创建。
 - 终端以 `*` 显示密码输入，不把密码放入 `.env`、Compose 或命令行参数。
@@ -25,46 +31,56 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 - 可保留 HEIC/HEIF 原片并额外生成 JPEG。
 - 支持日期、收藏、隐藏、最近 N 项和连续已有项目停止筛选。
 - 支持自定义目录结构、文件名和重名策略。
-- 可指定目录/文件权限，并可 touch 新媒体触发 Synology Photos 索引。
+- 可指定下载目录和文件权限。
+- 下载后恢复 iCloud 拍摄时间作为文件修改时间，并兼容 Synology Photos 索引触发。
 - 并发流式下载、断点续传、指数退避、大小/SHA-256 校验和原子落盘。
 - SQLite 状态库、运行记录、数据库备份和三层并发锁。
 - 挂载标记、剩余空间、inode、写权限和数据库完整性保护。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
-- 支持 `linux/amd64` 和 `linux/arm64`。
 
-## 当前限制
+## 使用边界
 
 - 只支持一个启用的 Apple Account；可同时选择该账号可访问的多个图库。
 - 暂不支持安全密钥认证和旧式两步认证。
-- 不执行远端删除、本地清理或双向同步。
+- 只执行 iCloud 到本地的单向备份，不删除 iCloud 内容，也不清理本地文件。
 - Apple Session 文件当前未加密。
 - 项目与 Apple Inc. 无隶属、认可或赞助关系。
 
-## 快速部署
+## 快速开始
 
 ### 1. 准备环境
 
 需要：
 
 - 较新的 Docker Engine；
-- Docker Compose v2 插件，可使用 `docker compose`；
+- Docker Compose 插件，可使用 `docker compose`；
 - 已启用 iCloud Photos 和双重认证的 Apple Account；
 - 两个可持久化目录：一个保存程序状态，一个保存照片。
 
 克隆仓库：
 
 ```bash
-git clone git@github.com:lwx-cloud/icloudHarbor.git
+git clone https://github.com/lwx-cloud/icloudHarbor.git
 cd icloudHarbor
 cp .env.example .env
+chmod 600 .env
 ```
 
-创建默认目录和挂载标记：
+默认目录对应关系：
+
+| 用途 | 宿主机默认路径 | 容器路径 | 保护要求 |
+| --- | --- | --- | --- |
+| 配置、数据库、Session 和凭据 | `./data/config` | `/config` | 高敏感，需完整安全备份 |
+| 照片下载目录 | `./data/photos` | `/photos` | 私人内容，需持久化并限制访问 |
+
+创建两个专用目录，并在实际照片目录根部创建挂载标记：
 
 ```bash
 mkdir -p ./data/config ./data/photos
 touch ./data/photos/.icloudharbor-mounted
 ```
+
+挂载标记是安全开关。没有它时程序会拒绝下载，避免照片卷未挂载后误写容器层。
 
 查看运行用户的数字 UID/GID：
 
@@ -89,9 +105,11 @@ IH_DOWNLOAD_VIDEOS=true
 IH_DOWNLOAD_LIVE_PHOTOS=true
 ```
 
-`IH_SYNC_INTERVAL` 的数字就是小时，常用选择为 `6`、`12` 或 `24`，不需要写 Cron。
+`IH_SYNC_INTERVAL` 只能填写 `6`、`12` 或 `24`，数字就是小时，不需要写 Cron。推荐使用
+`12` 或 `24`；`6` 小时请求更频繁，可能增加 Apple 限流或风控概率。
 所有开关只需填写 `true` 或 `false`。照片默认始终下载；视频和 Live Photo 默认也会下载。
-`IH_PUID` 和 `IH_PGID` 必须对配置目录和照片目录具有读写权限。必要时在宿主机调整属主：
+`IH_PUID` 和 `IH_PGID` 必须对配置目录和照片目录具有读写权限。只对刚创建的 iCloudHarbor
+专用目录调整属主，不要对已有的共享照片库盲目递归执行：
 
 ```bash
 sudo chown -R 1000:1000 ./data/config ./data/photos
@@ -99,16 +117,11 @@ sudo chown -R 1000:1000 ./data/config ./data/photos
 
 ### 2. 拉取并启动
 
-先检查 Compose 最终配置：
+先检查 Compose 配置是否有效。不要省略 `--quiet`；普通 `docker compose config` 会展开
+`.env`，可能把 Apple Account 或通知密钥打印到终端：
 
 ```bash
-docker compose config
-```
-
-如果 Docker Hub 仓库当前为私有，先登录一次：
-
-```bash
-docker login
+docker compose config --quiet
 ```
 
 拉取镜像并启动：
@@ -117,12 +130,18 @@ docker login
 docker compose pull
 docker compose up -d
 docker compose ps
-docker exec icloudharbor icloudharbor --version
-docker logs --tail=50 icloudharbor
+docker compose exec icloudharbor icloudharbor --version
+docker compose logs --tail=50 icloudharbor
 ```
 
-首次启动会生成 `./data/config/config.yaml`。已有配置文件不会被覆盖；非空 `IH_*`
-环境变量会在运行时覆盖对应 YAML 值。
+如果拉取镜像时提示无权访问，再执行 `docker login` 后重试。
+
+首次启动会生成 `./data/config/config.yaml`。已有配置文件不会被覆盖。配置型 `IH_*` 参数会在
+运行时覆盖对应 YAML 字段；`IH_CONFIG_PATH`、`IH_PHOTOS_PATH`、`IH_PUID`、`IH_PGID` 和
+`IH_CONTAINER_NAME` 属于 Compose 或容器入口参数，不写入 YAML。
+
+`IH_APPLE_ID` 会直接作为内部账号 ID，用于数据库、Session 目录和凭据文件名；它不会拼进
+照片保存路径，默认下载根目录仍是 `/photos`，也就是宿主机的 `IH_PHOTOS_PATH`。
 
 需要从当前源码进行本地构建时，使用开发覆盖文件：
 
@@ -133,11 +152,11 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ### 3. 完成 Apple 认证
 
 ```bash
-docker exec -it icloudharbor icloudharbor setup
+docker compose exec icloudharbor icloudharbor setup
 ```
 
 `docker compose up -d` 已经脱离终端，不能直接读取密码和验证码。首次登录未完成时，容器
-日志会明确显示上面的认证命令。`docker exec -it` 启动独立的交互进程；认证完成后该命令
+日志会明确显示认证命令。`docker compose exec` 启动独立的交互进程；认证完成后该命令
 立即退出，容器后台随即接手首次同步。
 
 程序会：
@@ -154,32 +173,32 @@ docker exec -it icloudharbor icloudharbor setup
 认证命令退出后直接查看下载：
 
 ```bash
-docker logs -f icloudharbor
+docker compose logs -f icloudharbor
 ```
 
 首次同步和每个文件的“正在下载”都由主容器输出，不需要再执行 `sync plan` 或 `sync run`。
 之后默认在容器启动时检查一次，并按 `IH_SYNC_INTERVAL` 的小时数自动同步。
 
-## 群晖示例
+## 群晖部署示例
 
-假设项目代码位于 `/volume1/docker/icloudharbor`，建议把运行状态放在单独目录，照片保存到
-`/volume2/photos/iCloud/personal`：
+假设项目与运行状态目录位于 `/volume1/docker/icloudharbor`，照片保存到
+`/volume2/photos/iCloud`：
 
 ```bash
-mkdir -p /volume1/docker/icloudharbor-data
-mkdir -p /volume2/photos/iCloud/personal
-touch /volume2/photos/iCloud/personal/.icloudharbor-mounted
+mkdir -p /volume1/docker/icloudharbor
+mkdir -p /volume2/photos/iCloud
+touch /volume2/photos/iCloud/.icloudharbor-mounted
 ```
 
-项目目录中的 `.env` 示例；第一项必填，其余项按群晖实际路径和用户添加：
+项目目录中的 `.env` 示例；`IH_APPLE_ID` 必填，其余项按群晖实际环境修改：
 
 ```dotenv
-IH_CONFIG_PATH=/volume1/docker/icloudharbor-data
+IH_APPLE_ID=your-account@example.com
+IH_CONFIG_PATH=/volume1/docker/icloudharbor
 IH_PHOTOS_PATH=/volume2/photos/iCloud
 IH_PUID=1026
 IH_PGID=100
 IH_TIMEZONE=Asia/Shanghai
-IH_APPLE_ID=your-account@example.com
 IH_SYNC_INTERVAL=24
 IH_RUN_ON_START=true
 
@@ -194,87 +213,127 @@ IH_WECOM_TO_USER=@all
 ```
 
 `1026:100` 只是示例。请在群晖终端运行 `id <用户名>`，填写实际数字 UID/GID，并确保它能
-写入上面两个目录。容器内默认下载目标是 `/photos`，对应宿主机 `IH_PHOTOS_PATH`。
+写入上面两个目录。`IH_PHOTOS_PATH` 会挂载为容器内默认下载目标 `/photos`，因此挂载标记
+必须放在这个宿主机目录的根部。
 
-## Session 与密码
+如果这两个目录是刚为 iCloudHarbor 新建的专用目录，可以在确认实际 UID/GID 后设置属主：
+
+```bash
+chown -R 1026:100 /volume1/docker/icloudharbor /volume2/photos/iCloud
+```
+
+如果使用群晖 ACL，则在 DSM 中授予同一用户读写权限。不要对已有的共享照片目录盲目递归
+修改属主。
+
+`.env` 至少包含 Apple Account，启用企业微信时还包含应用 Secret，请设置为仅管理员可读。
+Docker 管理员仍能查看容器环境变量；需要把通知密钥改为文件保存时，请使用
+[`CONFIGURATION.md`](CONFIGURATION.md) 中的高级 YAML 配置。
+
+## 认证续期与密码
 
 查看 Session 状态：
 
 ```bash
-docker exec icloudharbor icloudharbor session status
+docker compose exec icloudharbor icloudharbor session status
 ```
 
 Session 过期时：
 
 ```bash
-docker exec -it icloudharbor icloudharbor session renew
+docker compose exec icloudharbor icloudharbor session renew
 ```
-
-启用通知通道后，程序会读取 Apple 受信任 Session Cookie 的真实到期时间，默认从到期前
-7 天开始每天最多提醒一次。企业微信可使用与 icloudpd 相同的 `MEDIA_ID_*` 配置显示
-下载、启动、警告和认证临期封面。每次正式同步结束都会立即发送一次同步结果（包括无变化），
-前提是通知通道已启用；这不是额外的通知定时任务。
 
 该命令读取 `setup` 保存的本地凭据；Apple 要求双重认证时，只需再输入验证码。如果 Apple
 密码已经修改、凭据不存在或无法解密，请重新运行：
 
 ```bash
-docker exec -it icloudharbor icloudharbor setup
+docker compose exec icloudharbor icloudharbor setup
 ```
 
 `session renew` 成功后也会通知容器后台立即同步，然后结束交互命令。下载过程继续显示在：
 
 ```bash
-docker logs -f icloudharbor
+docker compose logs -f icloudharbor
 ```
 
 清除 Session 不会删除保存的密码：
 
 ```bash
-docker exec icloudharbor icloudharbor session clear
+docker compose exec icloudharbor icloudharbor session clear
 ```
 
 单独删除保存的密码：
 
 ```bash
-docker exec icloudharbor icloudharbor credentials clear
+docker compose exec icloudharbor icloudharbor credentials clear
 ```
 
 凭据密文和加密密钥都保存在 `/config/credentials`。这可以避免意外明文泄露，但拥有宿主机
 root 权限的人仍可恢复密码，因此 `/config` 必须按敏感数据保护。
 
+## 通知
+
+配置并启用通知通道后，正式同步会按开关发送成功、部分完成、失败或认证处理结果；只生成计划
+和“已有任务正在运行”不会发送结果通知。程序会读取 Apple 受信任 Session Cookie 的真实到期
+时间，并在可配置的提醒窗口内每天最多提醒一次，默认提前 7 天。
+
+企业微信可复用与 icloudpd 相同的 `MEDIA_ID_*` 配置显示下载、启动、警告和认证临期封面。
+启动通知会说明当前是立即检查、延迟启动、后台请求还是等待下一次计划；普通通知正文使用
+“同步完成”“已是最新”等可读状态，并显示文件数和易读的数据量。通知没有独立定时器，认证
+临期只会在同步时检查。成功、失败和认证通知默认开启；启动通知默认关闭，需要显式设置
+`IH_NOTIFY_STARTUP=true`。完整渠道配置见 [`CONFIGURATION.md`](CONFIGURATION.md)。
+
 ## 常用运维命令
 
 ```bash
 # 配置校验与生效值
-docker exec icloudharbor icloudharbor config validate
-docker exec icloudharbor icloudharbor config show
+docker compose exec icloudharbor icloudharbor config validate
+docker compose exec icloudharbor icloudharbor config show
 
 # 完整就绪检查
-docker exec icloudharbor icloudharbor doctor
+docker compose exec icloudharbor icloudharbor doctor
 
-# 强制全量扫描的只读计划
-docker exec icloudharbor icloudharbor sync plan --full-scan
+# 查看远端图库、root 图库中的相册和最近同步记录
+docker compose exec icloudharbor icloudharbor libraries list
+docker compose exec icloudharbor icloudharbor albums list --library root
+docker compose exec icloudharbor icloudharbor sync status
 
-# 强制全量扫描并下载
-docker exec icloudharbor icloudharbor sync run --full-scan
+# 生成同步计划，但不下载、不提交游标
+docker compose exec icloudharbor icloudharbor sync plan
+
+# 手动同步一次
+docker compose exec icloudharbor icloudharbor sync run
 
 # SQLite 完整性检查与备份
-docker exec icloudharbor icloudharbor database check
-docker exec icloudharbor icloudharbor database backup
+docker compose exec icloudharbor icloudharbor database check
+docker compose exec icloudharbor icloudharbor database backup
 
 # 容器日志
 docker compose logs --tail=200 icloudharbor
 
 # 持续查看当前正在处理的照片
-docker logs -f icloudharbor
+docker compose logs -f icloudharbor
 ```
+
+`config show` 会显示生效后的完整 Apple Account，请勿把未经脱敏的输出贴到公开 Issue。
+`sync plan` 不下载或替换照片文件，但仍会访问 Apple，并在 SQLite 中记录本次运行、图库状态
+以及已认领的本地文件；它不是完全无副作用的离线命令。
+
+`0.3.5` 起，照片、视频、Live Photo、RAW 和转换生成的 JPEG 都会保留 iCloud 拍摄时间作为
+文件修改时间。升级前已经下载的文件可执行下面的强制全量扫描批量校正；校验完整的文件不会
+重新下载：
+
+```bash
+docker compose exec icloudharbor icloudharbor sync run --full-scan
+```
+
+全量扫描会访问整个所选图库，耗时和 Apple 请求量都高于普通增量同步，不要把它当作日常命令。
 
 `INFO` 日志对每个文件只显示一条简洁的“正在下载”消息，并使用 `IH_PHOTOS_PATH` 显示
 文件在 Docker 宿主机上的实际路径，例如：
 
 ```text
-正在下载：/volume2/photos/iCloud/personal/2026/07/29/IMG_0001.JPG
+正在下载：/volume2/photos/iCloud/2026/07/29/IMG_0001.JPG
 ```
 
 下载成功后不重复输出完成消息；只有重试或失败时才会增加简短警告。日志不会输出资源 ID
@@ -287,18 +346,27 @@ docker logs -f icloudharbor
 
 ## 更新
 
-建议先备份整个配置目录，然后更新部署文件并拉取新镜像：
+先使用内置命令创建一致的 SQLite 在线备份：
+
+```bash
+docker compose exec icloudharbor icloudharbor database backup
+```
+
+整个 `IH_CONFIG_PATH` 还包含 Session、加密密钥和续期凭据；如需完整备份，应先停止容器，再对
+该宿主机目录创建快照或副本。不要公开备份内容。
+
+完成所需备份后，更新部署文件并拉取新镜像：
 
 ```bash
 git pull --ff-only
 docker compose pull
 docker compose up -d --force-recreate --remove-orphans
-docker exec icloudharbor icloudharbor --version
-docker exec icloudharbor icloudharbor doctor
+docker compose exec icloudharbor icloudharbor --version
+docker compose exec icloudharbor icloudharbor doctor
 ```
 
-照片目录不需要随镜像备份，但 `/config` 中包含 SQLite、Session 和本地续期凭据，必须持久化
-并纳入安全备份。
+镜像升级不会修改照片卷，但照片仍是私人数据，应纳入自己的备份和访问控制策略。`/config`
+包含 SQLite、Session 和本地续期凭据，必须持久化并纳入安全备份。
 
 ## 故障排查
 
@@ -310,7 +378,7 @@ docker exec icloudharbor icloudharbor doctor
 docker compose config --images
 docker compose pull
 docker compose up -d --force-recreate --remove-orphans
-docker exec icloudharbor icloudharbor --version
+docker compose exec icloudharbor icloudharbor --version
 ```
 
 `config --images` 应输出 `lwxcloud/icloudharbor:latest`。如果输出
@@ -320,7 +388,7 @@ docker exec icloudharbor icloudharbor --version
 显示旧的创建时间或缓存。若容器内仍是旧版，比较运行容器和本地 `latest` 的镜像 ID：
 
 ```bash
-docker inspect icloudharbor --format '{{.Image}}'
+docker inspect "$(docker compose ps -q icloudharbor)" --format '{{.Image}}'
 docker image inspect lwxcloud/icloudharbor:latest --format '{{.Id}}'
 ```
 
@@ -337,13 +405,14 @@ docker compose logs --tail=100 icloudharbor
 
 ### `marker_missing`
 
-在实际下载目标中创建标记文件。默认目标为宿主机照片卷下的 `personal`：
+在实际下载目标中创建标记文件。默认目标就是宿主机的 `IH_PHOTOS_PATH`：
 
 ```bash
 touch ./data/photos/.icloudharbor-mounted
 ```
 
-不要通过修改配置绕过挂载保护。
+上面是默认路径；修改过 `IH_PHOTOS_PATH` 时，应替换为 `.env` 中的真实宿主机路径。不要通过
+修改配置绕过挂载保护。
 
 ### `not_writable`
 
@@ -354,35 +423,47 @@ touch ./data/photos/.icloudharbor-mounted
 运行：
 
 ```bash
-docker exec -it icloudharbor icloudharbor session renew
+docker compose exec icloudharbor icloudharbor session renew
 ```
 
-如果仍失败，清除旧 Session 后重新设置：
+如果密码已修改或本地凭据无法使用，直接重新设置；`setup` 会清除旧 Session：
 
 ```bash
-docker exec icloudharbor icloudharbor session clear
-docker exec -it icloudharbor icloudharbor setup
+docker compose exec icloudharbor icloudharbor setup
 ```
+
+### 其他 Apple 认证状态
+
+- `TERMS_REQUIRED`：登录 iCloud 网页接受新的 Apple 服务条款，然后重新运行 `setup`。
+- `WEB_ACCESS_DISABLED`：先为 Apple Account 开启通过网页访问 iCloud 数据。
+- `ADP_APPROVAL_REQUIRED`：在受信任 Apple 设备上批准高级数据保护访问，再重新认证。
 
 ### 下载部分失败
 
-网络、限流和过期下载地址会自动重试。修复原因后再次运行 `sync run`；已经校验完成的资源会
-跳过，可续传的 `.part` 文件会继续使用。
+网络、限流和过期下载地址会自动重试。修复原因后再次运行：
+
+```bash
+docker compose exec icloudharbor icloudharbor sync run
+```
+
+已经校验完成的资源会跳过，可续传的 `.part` 文件会继续使用。
 
 ### 容器异常停止后提示数据库锁被占用
 
-`0.1.4` 起不需要手工删除 SQLite 锁。新同步会先取得持久化目录中的独占文件锁；确认没有
-仍在运行的同步进程后，只清除同一账号和图库的残留数据库租约并立即继续。若仍看到
-`sync_skipped_already_running`，说明确实有另一个同步任务正在运行。
+不要手工删除 SQLite 锁。新同步会先取得持久化目录中的独占文件锁；确认没有仍在运行的同步
+进程后，程序会自动恢复同一账号和图库的残留数据库租约。若仍看到
+`SKIPPED_ALREADY_RUNNING`，说明确实有另一个认证或同步任务正在运行。
 
 ## 安全说明
 
 - 不要提交 `.env`、`/config`、数据库、Session、凭据、通知令牌或真实 Apple ID。
 - 不要通过环境变量、Compose `command` 或 shell 历史传递 Apple 密码和验证码。
+- `.env` 应限制为仅管理员可读；Docker 管理员仍可查看其中的环境变量。
 - 只从可信源码构建镜像，并限制配置目录的宿主机访问权限。
 - Webhook 可使用 HMAC-SHA256 签名；通知令牌应放在权限受限的文件中。
-- 发现安全问题时，请使用 GitHub Security Advisory 私下报告，不要在公开 Issue 中附带账号、
-  Cookie、日志原文或照片信息。
+- 发现安全问题时，请使用
+  [GitHub Security Advisory](https://github.com/lwx-cloud/icloudHarbor/security/advisories/new)
+  私下报告，不要在公开 Issue 中附带账号、Cookie、日志原文或照片信息。
 
 ## License
 

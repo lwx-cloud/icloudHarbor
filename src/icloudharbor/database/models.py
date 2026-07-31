@@ -29,9 +29,9 @@ class Base(DeclarativeBase):
 class AccountRow(Base):
     __tablename__ = "accounts"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(String(220), primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
-    apple_id: Mapped[str] = mapped_column(String(320))
+    apple_id: Mapped[str] = mapped_column(String(220))
     region: Mapped[str] = mapped_column(String(32))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auth_status: Mapped[str] = mapped_column(String(64), default="UNCONFIGURED")

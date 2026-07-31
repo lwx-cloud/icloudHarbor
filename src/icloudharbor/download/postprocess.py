@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,20 +42,36 @@ class MediaPostProcessor:
                 break
             current = current.parent
 
-    def process_download(self, target: Path, relative_path: Path) -> None:
+    def process_download(
+        self,
+        target: Path,
+        relative_path: Path,
+        created_at: datetime,
+    ) -> None:
         self._apply_file_mode(target)
         jpeg, jpeg_created = self.ensure_jpeg(target, relative_path)
         if self.account.destination.synology_photos_app_fix:
             os.utime(target, None)
             if jpeg is not None and jpeg_created:
                 os.utime(jpeg, None)
+        self._apply_capture_time(target, created_at)
+        if jpeg is not None:
+            self._apply_capture_time(jpeg, created_at)
 
-    def process_existing(self, target: Path, relative_path: Path) -> None:
+    def process_existing(
+        self,
+        target: Path,
+        relative_path: Path,
+        created_at: datetime,
+    ) -> None:
         self.prepare_parent(target.parent)
         self._apply_file_mode(target)
         jpeg, _ = self.ensure_jpeg(target, relative_path)
         if jpeg is not None:
             self._apply_file_mode(jpeg)
+        self._apply_capture_time(target, created_at)
+        if jpeg is not None:
+            self._apply_capture_time(jpeg, created_at)
 
     def ensure_jpeg(self, source: Path, relative_path: Path) -> tuple[Path | None, bool]:
         media = self.account.media
@@ -94,6 +111,15 @@ class MediaPostProcessor:
         mode = self.account.destination.file_permissions
         if mode is not None:
             path.chmod(mode)
+
+    @staticmethod
+    def _apply_capture_time(path: Path, created_at: datetime) -> None:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        timestamp = created_at.timestamp()
+        if abs(path.stat().st_mtime - timestamp) <= 1:
+            return
+        os.utime(path, (timestamp, timestamp))
 
     @staticmethod
     def _convert_heic(source: Path, target: Path, quality: int) -> None:

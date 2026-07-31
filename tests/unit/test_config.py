@@ -45,6 +45,55 @@ def test_only_backup_mode_is_accepted(account_config: AccountConfig) -> None:
         AccountConfig.model_validate(payload)
 
 
+def test_account_id_accepts_apple_account_email(account_config: AccountConfig) -> None:
+    payload = account_config.model_dump()
+    payload["id"] = "photos+archive@example.com"
+
+    configured = AccountConfig.model_validate(payload)
+
+    assert configured.id == "photos+archive@example.com"
+
+
+@pytest.mark.parametrize(
+    "account_id",
+    ["../escape", "nested/account", "nested\\account", "bad:name", "bad account"],
+)
+def test_account_id_rejects_unsafe_path_characters(
+    account_config: AccountConfig,
+    account_id: str,
+) -> None:
+    payload = account_config.model_dump()
+    payload["id"] = account_id
+
+    with pytest.raises(ValidationError, match="安全的文件名"):
+        AccountConfig.model_validate(payload)
+
+
+def test_account_id_rejects_values_too_long_for_internal_paths(
+    account_config: AccountConfig,
+) -> None:
+    payload = account_config.model_dump()
+    payload["id"] = "a" * 221
+
+    with pytest.raises(ValidationError, match="220"):
+        AccountConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "apple_id",
+    ["two@@example.com", "has space@example.com", f"{'a' * 210}@example.com"],
+)
+def test_apple_id_rejects_unsafe_or_oversized_values(
+    account_config: AccountConfig,
+    apple_id: str,
+) -> None:
+    payload = account_config.model_dump()
+    payload["apple_id"] = apple_id
+
+    with pytest.raises(ValidationError, match="apple_id 格式无效"):
+        AccountConfig.model_validate(payload)
+
+
 def test_unimplemented_session_encryption_fails_closed(
     account_config: AccountConfig,
 ) -> None:
@@ -133,6 +182,7 @@ def test_environment_override_supports_common_docker_parameters(
 
     assert config.runtime.log_level == "DEBUG"
     assert config.runtime.log_format == "json"
+    assert config.accounts[0].id == "docker@example.com"
     assert config.accounts[0].apple_id == "docker@example.com"
     assert config.accounts[0].region == "china"
     assert config.accounts[0].libraries == ["root", "SharedSync"]
@@ -157,28 +207,6 @@ def test_environment_override_supports_common_docker_parameters(
     assert config.notifications.title == "家庭 iCloud"
     assert config.notifications.silent is True
     assert config.notifications.failure is True
-
-
-def test_environment_override_rejects_ambiguous_schedule(
-    tmp_path: Path,
-    account_config: AccountConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "version": 1,
-                "accounts": [account_config.model_dump(mode="json")],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("IH_SCHEDULE", "0 3 * * *")
-    monkeypatch.setenv("IH_SYNC_INTERVAL", "12")
-
-    with pytest.raises(ValueError, match="不能同时设置"):
-        load_config(path)
 
 
 def test_environment_override_builds_wecom_channel_without_persisting_secret(
@@ -280,12 +308,29 @@ def test_bootstrap_config_generates_initial_yaml_from_docker_parameters(
 
     assert created is True
     assert path.is_file()
+    assert config.accounts[0].id == "docker@example.com"
     assert config.accounts[0].apple_id == "docker@example.com"
     assert config.accounts[0].region == "china"
     assert config.accounts[0].destination.path == Path("/photos")
     assert config.accounts[0].media.videos is False
     assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
     assert config.accounts[0].sync.run_on_start is True
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["accounts"][0]["id"] == (
+        "docker@example.com"
+    )
+
+
+def test_explicit_account_id_overrides_apple_id_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IH_APPLE_ID", "docker@example.com")
+    monkeypatch.setenv("IH_ACCOUNT_ID", "family-archive")
+
+    config, _ = bootstrap_config(tmp_path / "config.yaml")
+
+    assert config.accounts[0].id == "family-archive"
+    assert config.accounts[0].apple_id == "docker@example.com"
 
 
 def test_bootstrap_defaults_to_24_hour_interval_and_startup_sync(
@@ -314,6 +359,7 @@ def test_bootstrap_config_never_overwrites_existing_yaml(
 
     assert created is False
     assert path.read_bytes() == original
+    assert config.accounts[0].id == "override@example.com"
     assert config.accounts[0].apple_id == "override@example.com"
 
 
@@ -327,91 +373,20 @@ def test_bootstrap_config_requires_apple_id(
         bootstrap_config(tmp_path / "config.yaml")
 
 
-def _write_legacy_yaml(path: Path, account_config: AccountConfig) -> None:
-    payload = account_config.model_dump(mode="json")
-    payload["media"] = {
-        "photos": True,
-        "photo_version": "both",
-        "raw": {"mode": "both"},
-    }
-    payload["naming"]["keep_unicode"] = True
-    payload["destination"]["mounted_marker"] = ".icloudharbor-mounted"
-    payload["download"] = {
-        "concurrency": 2,
-        "timeout": 300,
-        "max_retries": 5,
-        "verify_hash": True,
-        "keep_partial": True,
-        "chunk_size": "1MB",
-    }
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "version": 1,
-                "accounts": [payload],
-                "notifications": {"success": True, "no_changes": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def test_legacy_yaml_keys_are_migrated_and_dropped(
-    tmp_path: Path,
-    account_config: AccountConfig,
-) -> None:
-    path = tmp_path / "config.yaml"
-    _write_legacy_yaml(path, account_config)
-
-    config = load_config(path)
-
-    # photo_version=both + raw.mode=both 迁移为等价的 photo_size 选择
-    assert config.accounts[0].media.photo_size == ["original", "adjusted"]
-    # 生成的新配置不再包含任何遗留键
-    snapshot_data = yaml.safe_load(config_snapshot(config))
-    account = snapshot_data["accounts"][0]
-    assert "photo_version" not in account["media"]
-    assert "photos" not in account["media"]
-    assert "keep_unicode" not in account["naming"]
-    assert "mounted_marker" not in account["destination"]
-    assert "verify_hash" not in account["download"]
-    assert "keep_partial" not in account["download"]
-    assert "chunk_size" not in account["download"]
-    assert "no_changes" not in snapshot_data["notifications"]
-
-
-def test_legacy_photo_version_original_keeps_default_sizes(
+def test_removed_yaml_keys_are_rejected(
     tmp_path: Path,
     account_config: AccountConfig,
 ) -> None:
     path = tmp_path / "config.yaml"
     payload = account_config.model_dump(mode="json")
-    payload["media"] = {"photo_version": "original"}
+    payload["media"]["photo_version"] = "both"
     path.write_text(
         yaml.safe_dump({"version": 1, "accounts": [payload]}),
         encoding="utf-8",
     )
 
-    config = load_config(path)
-
-    assert config.accounts[0].media.photo_size == ["original"]
-
-
-def test_sync_interval_keeps_duration_compatibility(
-    tmp_path: Path,
-    account_config: AccountConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("IH_SYNC_INTERVAL", "12h")
-
-    config = load_config(path)
-
-    assert config.accounts[0].sync.schedule == ScheduleConfig(interval="12h")
+    with pytest.raises(ValidationError, match="photo_version"):
+        load_config(path)
 
 
 @pytest.mark.parametrize("hours", [6, 12, 24])
@@ -433,8 +408,8 @@ def test_sync_interval_plain_number_means_hours(
     assert config.accounts[0].sync.schedule == ScheduleConfig(interval=f"{hours}h")
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "1.5", "often"])
-def test_sync_interval_rejects_values_that_are_not_positive_integer_hours(
+@pytest.mark.parametrize("value", ["0", "1", "8", "36", "168", "12h", "1.5", "often"])
+def test_sync_interval_rejects_values_outside_supported_choices(
     tmp_path: Path,
     account_config: AccountConfig,
     monkeypatch: pytest.MonkeyPatch,
@@ -449,23 +424,6 @@ def test_sync_interval_rejects_values_that_are_not_positive_integer_hours(
 
     with pytest.raises(ValueError, match="IH_SYNC_INTERVAL"):
         load_config(path)
-
-
-def test_advanced_cron_environment_variable_remains_compatible(
-    tmp_path: Path,
-    account_config: AccountConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("IH_SCHEDULE", "0 3 * * *")
-
-    config = load_config(path)
-
-    assert config.accounts[0].sync.schedule == "0 3 * * *"
 
 
 def test_explicit_run_on_start_false_is_preserved(
@@ -483,35 +441,6 @@ def test_explicit_run_on_start_false_is_preserved(
     config = load_config(path)
 
     assert config.accounts[0].sync.run_on_start is False
-
-
-def test_removed_environment_variables_are_ignored_not_fatal(
-    tmp_path: Path,
-    account_config: AccountConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        yaml.safe_dump({"version": 1, "accounts": [account_config.model_dump(mode="json")]}),
-        encoding="utf-8",
-    )
-    for name in (
-        "IH_VERIFY_HASH",
-        "IH_KEEP_PARTIAL",
-        "IH_CHUNK_SIZE",
-        "IH_MOUNTED_MARKER",
-        "IH_DOWNLOAD_PHOTOS",
-        "IH_KEEP_UNICODE",
-        "IH_UMASK",
-        "IH_NOTIFY_NO_CHANGES",
-        "media_id_delete",
-    ):
-        monkeypatch.setenv(name, "false")
-
-    config = load_config(path)
-
-    # 被忽略的旧变量不影响加载 (ignored env vars stay non-fatal)
-    assert config.accounts[0].download.concurrency == 1
 
 
 def test_schedule_string_accepts_duration_form(

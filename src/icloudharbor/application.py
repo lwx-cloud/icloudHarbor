@@ -32,6 +32,21 @@ from icloudharbor.security.credentials import CredentialStore
 
 ProtocolFactory = Callable[[AccountConfig], ICloudProtocol]
 LOGGER = structlog.get_logger(__name__)
+SYNC_ERROR_MESSAGES = {
+    "AUTH_REQUIRED": "Apple 会话已失效，请运行 session renew；未保存本地凭据时请重新运行 setup。",
+    "TERMS_REQUIRED": "Apple 要求接受新的服务条款，请先登录 iCloud 网页完成处理。",
+    "WEB_ACCESS_DISABLED": "Apple Account 未开启网页访问 iCloud 数据。",
+    "ADP_APPROVAL_REQUIRED": "Apple 高级数据保护阻止了访问，需要先在受信任设备上批准。",
+    "ACCESS_DENIED": "Apple 拒绝访问所选图库或相册，请检查账号权限和配置。",
+    "RATE_LIMITED": "Apple 服务正在限流，请稍后重试。",
+    "SERVICE_UNAVAILABLE": "Apple 服务暂时不可用，请稍后重试。",
+    "NETWORK_TIMEOUT": "连接 Apple 服务超时，请检查网络后重试。",
+    "STORAGE_FULL": "照片目录剩余空间不足。",
+    "MOUNT_MISSING": "照片目录未正确挂载，或缺少挂载标记文件。",
+    "FILE_PERMISSION_ERROR": "容器没有权限写入照片目录。",
+    "DATABASE_ERROR": "本地状态数据库异常。",
+    "DATA_INTEGRITY_ERROR": "文件下载完成后校验失败。",
+}
 
 
 class HarborApplication:
@@ -253,7 +268,7 @@ class HarborApplication:
             return
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED
-            title = f"{self.config.notifications.title} 同步完成"
+            title_suffix = "同步完成" if result.downloaded_count else "已是最新"
         elif result.error_code in {
             "AUTH_REQUIRED",
             "TERMS_REQUIRED",
@@ -261,22 +276,61 @@ class HarborApplication:
             "ADP_APPROVAL_REQUIRED",
         }:
             event_type = NotificationType.AUTH_REQUIRED
-            title = f"{self.config.notifications.title} 需要重新认证"
+            title_suffix = "需要处理 Apple 认证"
         elif result.status == "PARTIAL":
             event_type = NotificationType.SYNC_PARTIAL
-            title = f"{self.config.notifications.title} 同步部分失败"
+            title_suffix = "同步部分完成"
         else:
             event_type = NotificationType.SYNC_FAILED
-            title = f"{self.config.notifications.title} 同步失败"
+            title_suffix = "同步失败"
+
+        lines = [f"账号：{account.name}"]
+        if result.status == "COMPLETED":
+            if result.downloaded_count:
+                lines.append(f"本次下载：{result.downloaded_count} 个文件")
+                lines.append(f"下载数据：{self._format_data_size(result.bytes_downloaded)}")
+            else:
+                lines.append("本次检查完成，没有发现需要下载的新文件。")
+            if result.skipped_count:
+                lines.append(f"本地已有：{result.skipped_count} 个文件")
+        elif result.status == "PARTIAL":
+            lines.extend(
+                [
+                    f"成功下载：{result.downloaded_count} 个文件",
+                    f"下载失败：{result.failed_count} 个文件",
+                ]
+            )
+            if result.skipped_count:
+                lines.append(f"本地已有：{result.skipped_count} 个文件")
+            if result.bytes_downloaded:
+                lines.append(f"下载数据：{self._format_data_size(result.bytes_downloaded)}")
+            lines.append("部分文件未能完成，请查看容器日志后重试。")
+        else:
+            lines.append(
+                SYNC_ERROR_MESSAGES.get(
+                    result.error_code or "",
+                    "同步未能完成，请查看容器日志确认原因。",
+                )
+            )
+
         self.notifier.send(
             NotificationEvent(
                 event_type,
-                title,
-                (
-                    f"账号：{account.name}\n状态：{result.status}\n"
-                    f"下载：{result.downloaded_count}\n跳过：{result.skipped_count}\n"
-                    f"失败：{result.failed_count}\n数据：{result.bytes_downloaded} 字节"
-                ),
+                f"{self.config.notifications.title} {title_suffix}",
+                "\n".join(lines),
                 {"run_id": result.run_id, "error_code": result.error_code},
             )
         )
+
+    @staticmethod
+    def _format_data_size(size: int) -> str:
+        value = float(size)
+        units = ("B", "KB", "MB", "GB", "TB")
+        unit = units[0]
+        for unit in units:
+            if value < 1024 or unit == units[-1]:
+                break
+            value /= 1024
+        if unit == "B":
+            return f"{size} B"
+        return f"{value:.2f}".rstrip("0").rstrip(".") + f" {unit}"

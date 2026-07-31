@@ -633,6 +633,36 @@ def _dispatch_pending_sync_requests(
     return dispatched
 
 
+def _startup_notification(
+    instance: HarborApplication,
+    account: AccountConfig,
+    scheduler: SchedulerService,
+) -> NotificationEvent:
+    lines = [f"账号：{account.name}"]
+    if instance.repository.pending_sync_requests(account.id):
+        lines.append("已收到同步请求，即将检查 iCloud 并下载新内容。")
+    elif account.sync.run_on_start:
+        if account.sync.download_delay:
+            lines.append(f"将在 {account.sync.download_delay} 分钟后检查 iCloud 并下载新内容。")
+        else:
+            lines.append("正在检查 iCloud，有新内容时会自动下载。")
+    else:
+        next_runs = [
+            run_at
+            for job_id, run_at in scheduler.next_run_times()
+            if job_id == f"sync:{account.id}"
+        ]
+        if next_runs:
+            lines.append(f"下一次同步：{min(next_runs):%Y-%m-%d %H:%M:%S %Z}")
+        else:
+            lines.append("当前未安排自动同步。")
+    return NotificationEvent(
+        NotificationType.APP_STARTED,
+        f"{instance.config.notifications.title} 容器已启动",
+        "\n".join(lines),
+    )
+
+
 @app.command("daemon")
 def daemon(ctx: typer.Context) -> None:
     """Run the container's foreground scheduler without opening a network port."""
@@ -653,13 +683,7 @@ def daemon(ctx: typer.Context) -> None:
 
     scheduler = SchedulerService(instance.config, scheduled)
     scheduler.start()
-    instance.notifier.send(
-        NotificationEvent(
-            NotificationType.APP_STARTED,
-            f"{instance.config.notifications.title} 已启动",
-            "容器调度器已启动，等待下一次同步计划。",
-        )
-    )
+    instance.notifier.send(_startup_notification(instance, account, scheduler))
     LOGGER.info("iCloudHarbor 调度器已启动")
     for job_id, run_at in scheduler.next_run_times():
         LOGGER.info(f"下一次任务：{job_id}；{run_at:%Y-%m-%d %H:%M:%S %Z}")

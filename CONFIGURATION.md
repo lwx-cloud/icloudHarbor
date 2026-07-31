@@ -19,26 +19,30 @@
 
 | 参数名 | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_APPLE_ID` | 是 | 无 | Apple Account 邮箱 | 指定要备份的 iCloud 账号；密码和验证码不写在 `.env`。 |
-| `IH_CONTAINER_NAME` | 否 | `icloudharbor` | 未占用的容器名 | 设置 Docker 容器名称。 |
+| `IH_APPLE_ID` | 是 | 无 | Apple Account 邮箱，不超过 220 个 UTF-8 字节 | 指定要备份的 iCloud 账号，并直接作为默认账号 ID；密码和验证码不写在 `.env`。 |
+| `IH_CONTAINER_NAME` | 否 | `icloudharbor` | 未占用的容器名 | 设置 Compose 创建的容器名，供 `docker logs`、`docker exec` 和日志中的认证命令使用；不影响账号、配置或照片目录。只有同一主机运行多个独立实例或名称冲突时才需修改。 |
 | `IH_CONFIG_PATH` | 否 | `./data/config` | 宿主机路径 | 保存配置、数据库、Session、凭据和通知密钥。 |
 | `IH_PHOTOS_PATH` | 否 | `./data/photos` | 宿主机路径 | 设置照片保存目录，并挂载到容器 `/photos`。 |
 | `IH_PUID` | 否 | `1000` | 大于 `0` 的 UID | 设置容器进程和新文件使用的用户 ID。 |
 | `IH_PGID` | 否 | `1000` | 大于 `0` 的 GID | 设置容器进程和新文件使用的组 ID。 |
 | `IH_TIMEZONE` | 否 | `UTC`（`.env.example` 为 `Asia/Shanghai`） | IANA 时区 | 设置同步计划和每日提醒使用的时区。 |
 | `IH_REGION` | 否 | `auto` | `auto`、`global`、`china` | 选择 Apple 全球区或中国大陆区服务；通常保持 `auto`。 |
-| `IH_SYNC_INTERVAL` | 否 | `24` | `1`–`168` 的整数小时；常用 `6`、`12`、`24`、`36`、`48`、`168` | 设置两次自动检查 iCloud 的间隔；`12` 表示每 12 小时一次，不是每天 12 点。低于 12 小时可能被 Apple 限流。 |
+| `IH_SYNC_INTERVAL` | 否 | `24` | 只能是 `6`、`12`、`24` | 设置两次自动检查 iCloud 的间隔小时数；`12` 表示每 12 小时一次，不是每天 12 点。推荐 `12` 或 `24`；`6` 请求更频繁，可能增加 Apple 限流或风控概率。 |
 | `IH_RUN_ON_START` | 否 | `true` | `true`、`false` | 是否在容器启动后安排一次同步。 |
 | `IH_DOWNLOAD_VIDEOS` | 否 | `true` | `true`、`false` | 是否下载普通视频，不控制 Live Photo。 |
 | `IH_DOWNLOAD_LIVE_PHOTOS` | 否 | `true` | `true`、`false` | 是否下载 Live Photo；`false` 会跳过整个 Live Photo 项目。 |
 | `IH_CONVERT_HEIC_TO_JPEG` | 否 | `false` | `true`、`false` | 是否保留 HEIC 原片并额外生成 JPEG。 |
-| `IH_SYNOLOGY_PHOTOS_APP_FIX` | 否 | `false` | `true`、`false` | 是否更新新文件时间，帮助 Synology Photos 发现文件。 |
+| `IH_SYNOLOGY_PHOTOS_APP_FIX` | 否 | `false` | `true`、`false` | 是否额外触发文件时间变更，帮助 Synology Photos 发现新文件；最终修改时间仍恢复为 iCloud 拍摄时间。 |
 | `IH_ALBUMS` | 否 | 空（全部） | 相册 ID/名称，多个用英文逗号分隔 | 只扫描指定相册。 |
 | `IH_EXCLUDE_ALBUMS` | 否 | 空 | 相册 ID/名称，多个用英文逗号分隔 | 跳过指定相册，不能与 `IH_ALBUMS` 重复。 |
 | `IH_RECENT_ONLY` | 否 | 空（全部） | 大于 `0` 的整数 | 只处理最近加入的 N 个项目，适合首次试运行。 |
 
-修改已有实例的 `IH_PHOTOS_PATH` 不会自动搬文件；先停容器并搬完整目录。更换
-`IH_APPLE_ID` 时应使用新的 `IH_CONFIG_PATH`，最好也使用独立的 `IH_PHOTOS_PATH`。
+修改已有实例的 `IH_PHOTOS_PATH` 不会自动搬文件；先停容器并搬完整目录。默认情况下，更换
+`IH_APPLE_ID` 也会直接更换账号 ID，旧数据库记录、Session 和凭据不会自动迁移；请使用新的
+`IH_CONFIG_PATH`，最好也使用独立的 `IH_PHOTOS_PATH`。
+
+`0.3.5` 起所有下载资源和转换生成的 JPEG 都会把文件修改时间恢复为 iCloud 拍摄时间。
+升级前已下载的文件可执行一次 `icloudharbor sync run --full-scan` 校正，无需重新下载。
 
 ### 企业微信（可选）
 
@@ -72,7 +76,7 @@
 | --- | --- | --- | --- | --- |
 | `IH_LOG_LEVEL`（`runtime.log_level`） | 否 | `INFO` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | 设置日志详细程度。 |
 | `IH_LOG_FORMAT`（`runtime.log_format`） | 否 | `text` | `text`、`json` | 设置普通文本或结构化 JSON 日志。 |
-| `IH_ACCOUNT_ID`（`accounts[].id`） | 否 | `personal` | 1–64 位字母、数字、`_`、`-` | 设置数据库、Session 和凭据使用的内部账号 ID；修改后需重新认证。 |
+| `IH_ACCOUNT_ID`（`accounts[].id`） | 否 | 与 `IH_APPLE_ID` 相同 | 不超过 220 个 UTF-8 字节的安全文件名 | 显式覆盖数据库、Session 和凭据使用的账号 ID；通常无需设置，修改后需重新认证。 |
 | `IH_ACCOUNT_NAME`（`accounts[].name`） | 否 | `我的 iCloud` | 任意文本 | 设置日志和通知中显示的账号名称。 |
 | `IH_LIBRARIES`（`accounts[].libraries`） | 否 | `root` | 图库 ID/名称，多个用英文逗号分隔 | 设置要扫描的个人或共享图库。 |
 
@@ -88,11 +92,43 @@
 
 | 参数名（YAML 路径） | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_PHOTO_SIZE`（`accounts[].media.photo_size`） | 否 | 空（原始版本） | `original`、`medium`、`thumb`、`adjusted`、`alternative`，多个用英文逗号分隔 | 设置普通照片和视频下载的资源版本。 |
-| `IH_LIVE_PHOTO_SIZE`（`accounts[].media.live_photo_size`） | 否 | `original` | `original`、`medium`、`thumb` | 设置 Live Photo 图片和短视频的尺寸。 |
-| `IH_RAW_MODE`（`accounts[].media.raw.mode`） | 否 | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | 设置 RAW/JPEG 伴随资源的保留方式。 |
+| `IH_PHOTO_SIZE`（`accounts[].media.photo_size`） | 否 | 空（按原始版本处理） | `original`、`medium`、`thumb`、`adjusted`、`alternative`，多个用英文逗号分隔 | 指定普通照片和普通视频要下载的 iCloud 资源版本；选择多个会分别保存多个文件。 |
+| `IH_LIVE_PHOTO_SIZE`（`accounts[].media.live_photo_size`） | 否 | `original` | `original`、`medium`、`thumb` | 指定 Live Photo 静态图片和配对短视频共同使用的尺寸版本。 |
+| `IH_RAW_MODE`（`accounts[].media.raw.mode`） | 否 | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg` | 决定 RAW 项目中 RAW、JPEG 伴随资源和普通原始资源如何保留。 |
 | `IH_JPEG_PATH`（`accounts[].media.jpeg_path`） | 否 | 空（与 HEIC 同目录） | 容器内路径，如 `/photos/jpeg` | 设置 HEIC 转换后 JPEG 的保存目录。 |
 | `IH_JPEG_QUALITY`（`accounts[].media.jpeg_quality`） | 否 | `100` | `0`–`100` 的整数 | 设置 HEIC 转 JPEG 的质量。 |
+
+`IH_PHOTO_SIZE` 的每个值含义如下。Apple 没有提供某个版本时，程序不会自行缩放生成该版本：
+
+| 值 | 下载内容 | 适用场景 |
+| --- | --- | --- |
+| `original` | Apple 提供的原始尺寸、未编辑资源。 | 正式备份的默认选择，通常画质最高、文件最大。 |
+| `medium` | Apple 提供的中等尺寸预览资源，具体分辨率由 Apple 决定。 | 只需浏览且想节省空间；不能替代原片备份。 |
+| `thumb` | Apple 提供的缩略图资源。 | 测试目录或快速预览；不建议作为唯一备份。 |
+| `adjusted` | 在 Apple Photos 中编辑后由 iCloud 提供的版本。 | 与 `original` 组合为 `original,adjusted`，同时保留原片和编辑效果。 |
+| `alternative` | 允许选择 RAW/JPEG 伴随资源，本身不是分辨率。 | 显式设置 `IH_PHOTO_SIZE` 后仍需 RAW/JPEG 伴随文件时加入，最终保留哪种格式由 `IH_RAW_MODE` 决定。 |
+
+不设置 `IH_PHOTO_SIZE` 时，会按 `original` 处理，并继续根据 `IH_RAW_MODE` 选择 RAW/JPEG
+伴随资源。只要显式填写了尺寸列表，就必须把 `alternative` 加入列表，RAW/JPEG 伴随资源才会
+进入下载计划。
+
+`IH_LIVE_PHOTO_SIZE` 的三个值会同时作用于静态图片和配对短视频：
+
+| 值 | 下载内容 | 适用场景 |
+| --- | --- | --- |
+| `original` | 两部分都选择 Apple 提供的原始尺寸版本。 | 默认且最适合作为完整备份。 |
+| `medium` | 两部分都选择中等尺寸版本。 | 希望降低画质和空间占用时使用。 |
+| `thumb` | 两部分都选择缩略尺寸版本。 | 只适合预览或测试，不建议作为唯一备份。 |
+
+`IH_RAW_MODE` 的选择结果：
+
+| 值 | RAW/JPEG 资源处理 | 适用场景 |
+| --- | --- | --- |
+| `raw_only` | 选择 RAW 伴随资源，跳过 JPEG 伴随资源和普通 `photo_original`。没有 RAW 的普通照片可能因此没有可下载资源。 | 只做 RAW 后期，并明确接受跳过非 RAW 原片。 |
+| `jpeg_only` | 选择 JPEG 伴随资源，不选择 RAW；普通原始资源仍按 `IH_PHOTO_SIZE` 处理。 | 只需常规图片格式，不保留 RAW。 |
+| `both` | RAW 和 JPEG 伴随资源都选择，普通原始资源也照常处理。 | 默认且最完整，但空间占用最大。 |
+| `prefer_raw` | 选择 RAW 伴随资源，不选择 JPEG 伴随资源；普通原始资源仍照常处理。 | 保留 RAW，同时减少一份 JPEG 伴随文件。 |
+| `prefer_jpeg` | 选择 JPEG 伴随资源，不选择 RAW；普通原始资源仍照常处理。 | 优先兼容查看并节省 RAW 空间。 |
 
 #### 日期与内容筛选
 
@@ -108,15 +144,24 @@
 
 | 参数名（YAML 路径） | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_FOLDER_STRUCTURE`（`accounts[].naming.folder_structure`） | 否 | `{created:%Y/%m/%d}` | 相对路径模板 | 设置照片目录结构。 |
-| `IH_FILENAME_TEMPLATE`（`accounts[].naming.filename`） | 否 | `{original_name}` | 不含 `/`、`\` 的文件名模板 | 设置下载文件名。 |
-| `IH_CONFLICT_POLICY`（`accounts[].naming.conflict_policy`） | 否 | `suffix_asset_id` | `suffix_asset_id`、`always_asset_id`、`timestamp`、`error` | 设置文件重名时追加 Asset ID、时间戳或直接报错。 |
+| `IH_FOLDER_STRUCTURE`（`accounts[].naming.folder_structure`） | 否 | `{created:%Y/%m/%d}` | 目标照片目录内的相对路径模板 | 决定每个资源放入哪些子目录。默认会把拍摄于 2026-07-31 的文件放入 `2026/07/31/`；可改为 `{library}/{created:%Y/%m}` 等组合。模板字段见[第六章](#六文件名模板)。 |
+| `IH_FILENAME_TEMPLATE`（`accounts[].naming.filename`） | 否 | `{original_name}` | 不含 `/`、`\` 的文件名模板 | 决定每个下载资源的文件名。可使用 `{stem}_{created:%Y%m%d}` 等模板；程序始终保留该资源自己的扩展名，避免把 Live Photo 视频或 RAW 文件误命名为照片扩展名。 |
+| `IH_CONFLICT_POLICY`（`accounts[].naming.conflict_policy`） | 否 | `suffix_asset_id` | `suffix_asset_id`、`always_asset_id`、`timestamp`、`error` | 决定两个不同 iCloud 资源渲染到同一本地路径时如何处理。 |
+
+修改目录或文件名模板不会搬动已经下载的文件；数据库仍沿用旧文件路径，新资源才使用新模板。
+命名字段中的非法字符会替换为 `_`。四种重名策略如下：
+
+| 值 | 处理方式 |
+| --- | --- |
+| `suffix_asset_id` | 仅发生冲突时，在扩展名前追加清理后的 Asset ID 末 8 位，例如 `IMG_1234ABCD.JPG`。 |
+| `always_asset_id` | 每个文件都追加 Asset ID 末 8 位，即使当前没有重名；路径从一开始就保持唯一。 |
+| `timestamp` | 仅发生冲突时追加拍摄时间，例如 `IMG_20260731_153000.JPG`。同一秒仍冲突时再追加数字序号。 |
+| `error` | 遇到冲突立即报错并让本次同步失败，适合希望人工检查所有重名的场景。 |
 
 #### 调度与扫描方式
 
 | 参数名（YAML 路径） | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_SCHEDULE`（`accounts[].sync.schedule`） | 否 | 空 | 时长如 `12h`、`1d`，或五段 Cron | 设置高级同步计划，不能与 `IH_SYNC_INTERVAL` 同时使用。 |
 | `IH_SYNC_STRATEGY`（`accounts[].sync.strategy`） | 否 | `cursor` | `cursor`、`full` | 设置增量扫描或每次完整扫描。 |
 | `IH_FULL_SCAN_INTERVAL`（`accounts[].sync.full_scan_interval`） | 否 | `30d` | 时长，如 `12h`、`7d`、`4w` | 设置增量模式下定期完整扫描的间隔。 |
 | `IH_DOWNLOAD_DELAY`（`accounts[].sync.download_delay`） | 否 | `0` | `0`–`60` 的整数分钟 | 设置容器启动后首次同步的延迟。 |
@@ -143,31 +188,15 @@
 | `IH_NOTIFY_AUTH_REQUIRED`（`notifications.auth_required`） | 否 | `true` | `true`、`false` | 是否发送认证失效和认证临期通知。 |
 | `IH_NOTIFICATION_DAYS`（`notifications.notification_days`） | 否 | `7` | `1`–`30` 天 | 设置认证到期前多少天开始提醒。 |
 
+启动通知会根据实际配置显示“正在检查 iCloud”、延迟分钟数或下一次同步时间。同步成功但
+没有新文件时标题为“已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。
+
 注意事项：
 
 - 非空 `IH_*` 每次启动都会覆盖 YAML；从 `.env` 删掉变量后，之前写入 `config.yaml` 的值仍保留，需要同时改 YAML。
 - 通知渠道（`notifications.channels`）为空时，所有 `IH_NOTIFY_*` 开关不会产生任何消息。
-- 为兼容早期版本，容器仍接受小写 `notification_days`，新部署统一用 `IH_NOTIFICATION_DAYS`。
 - 任意账号级 `IH_*` 覆盖都要求 YAML 的 `accounts` 列表恰好只有一个账号；当前版本也只支持一个启用账号。
 - 相册、`recent_only`、`until_found` 扫描不会推进完整图库游标——以后移除这些限制时会安全地重新全量扫描，不会漏掉旧项目。
-
-#### 旧版本参数怎么处理
-
-新配置不要再填写以下参数：
-
-| 旧参数 | 当前替代或固定行为 |
-| --- | --- |
-| `IH_PHOTO_VERSION` | 改用 `IH_PHOTO_SIZE`。 |
-| `IH_VERIFY_HASH` | SHA-256 校验固定开启。 |
-| `IH_KEEP_PARTIAL` | `.part` 断点续传固定开启。 |
-| `IH_CHUNK_SIZE` | 下载块固定为 `1MB`。 |
-| `IH_MOUNTED_MARKER` | 标记名固定为 `.icloudharbor-mounted`。 |
-| `IH_DOWNLOAD_PHOTOS` | 照片下载固定开启。 |
-| `IH_KEEP_UNICODE` | Unicode 文件名固定保留。 |
-| `IH_UMASK` | 固定为 `0022`；权限改用 `IH_DIRECTORY_PERMISSIONS`、`IH_FILE_PERMISSIONS`。 |
-| `IH_NOTIFY_NO_CHANGES` | 已并入 `IH_NOTIFY_SUCCESS`。 |
-| `MEDIA_ID_DELETE` | 已删除，项目没有删除通知。 |
-| `IH_DESTINATION` | 改用 `IH_PHOTOS_PATH`。 |
 
 ### 仅 `config.yaml` 可用的参数
 
@@ -187,8 +216,7 @@
 | `security.allow_remote_delete` | 否 | `false` | 只能是 `false` | 固定禁止删除 iCloud 内容。 |
 
 `IH_CONFIG_FILE=/config/config.yaml` 是 Compose 内部使用的配置文件位置，不是普通用户参数；
-修改它会脱离默认持久化布局。为兼容早期版本，容器仍接受小写 `notification_days`，新部署统一
-使用 `IH_NOTIFICATION_DAYS`。
+修改它会脱离默认持久化布局。
 
 配置为严格模式：写错参数名会直接报错，不会静默忽略。
 
@@ -258,11 +286,11 @@ chown -R 99:100 /volume1/docker/icloudharbor /volume2/photos/iCloud
 ### 场景 2：改同步频率
 
 ```dotenv
-# 数字就是小时，常用选择：6、12、24
+# 数字就是小时，只能选择：6、12、24
 IH_SYNC_INTERVAL=12
 ```
 
-低于 12 小时的频率可能触发 Apple 限流，不建议更密。
+推荐选择 `12` 或 `24`。`6` 小时请求更频繁，可能增加 Apple 限流或风控概率。
 
 必须固定在某个钟点运行时，才需要在高级 `config.yaml` 中使用 Cron：
 
@@ -342,7 +370,7 @@ runtime:
   temp_path: /config/tmp
 
 accounts:
-  - id: personal
+  - id: your-account@example.com
     name: 我的 iCloud
     apple_id: your-account@example.com
     region: china
@@ -514,7 +542,7 @@ channels:
 | `{original_name}` | iCloud 返回的原始文件名。 |
 | `{stem}` / `{extension}` | 原文件名主体 / 扩展名。 |
 | `{asset_id}` / `{asset_id_short}` | 完整远端 Asset ID / 清理后末 8 位。 |
-| `{account}` / `{library}` / `{album}` | 账号 ID / 图库 ID / 相册名（未按相册扫描时为空）。 |
+| `{account}` / `{library}` / `{album}` | 账号 ID（默认就是 `IH_APPLE_ID`）/ 图库 ID / 相册名（未按相册扫描时为空）。 |
 | `{media_type}` | `photo` 或 `video`。 |
 | `{resource_type}` | 资源类型。 |
 | `{version}` | `original` / `adjusted` 等版本名。 |
@@ -558,8 +586,9 @@ docker compose exec icloudharbor icloudharbor healthcheck
 
 **提示首次启动需要 `IH_APPLE_ID`**
 `.env` 必须与 `docker-compose.yml` 同目录，值不能是空字符串。如果只是首次认证前修正邮箱，也可改
-现有 YAML 的 `apple_id`；已经认证或同步后不要直接换邮箱，应为新账号使用新的
-`IH_CONFIG_PATH`，最好也使用独立的 `IH_PHOTOS_PATH`。
+现有 YAML 的 `apple_id` 和 `id`；已经认证或同步后不要直接换邮箱。默认账号 ID 与
+`IH_APPLE_ID` 相同，旧状态不会自动迁移，因此应为新账号使用新的 `IH_CONFIG_PATH`，最好也使用
+独立的 `IH_PHOTOS_PATH`。
 
 **提示挂载标记不存在**
 默认配置的实际下载目录就是 `IH_PHOTOS_PATH`：`touch <IH_PHOTOS_PATH>/.icloudharbor-mounted`。

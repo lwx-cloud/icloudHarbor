@@ -1,13 +1,35 @@
-# iCloudHarbor 项目状态与开发约定
+# iCloudHarbor AI 维护指南
 
-本文是项目内部的长期上下文，供维护者和自动化开发代理使用。公开用户的安装与使用说明见
-[`README.md`](README.md)，全部配置项见 [`CONFIGURATION.md`](CONFIGURATION.md)。
+本文是仓库级长期上下文，供维护者和自动化开发代理理解项目、定位代码和判断改动范围。公开
+用户的安装与使用说明见 [`README.md`](README.md)，全部配置项见
+[`CONFIGURATION.md`](CONFIGURATION.md)。
+
+## 0. 阅读方式与事实优先级
+
+开始修改前按以下顺序建立上下文：
+
+1. 先读本文件，确认产品边界、依赖方向和不可破坏规则。
+2. 涉及配置或公开命令时，再读 `CONFIGURATION.md` 和 `README.md` 的对应章节。
+3. 用 `rg` 定位实现和测试；不要仅凭文档中的版本号、测试数量或历史调查推断当前行为。
+4. 先执行 `git status --short`。工作区可能已有维护者修改，必须在现有内容上继续，不得回退
+   无关改动。
+
+判断“当前实现是什么”时，事实优先级为：
+
+1. `src/` 的实现与对应测试；
+2. `docker-compose.yml`、`Dockerfile`、入口脚本和 CI；
+3. `CONFIGURATION.md` 与 `README.md`；
+4. 本文件末尾带日期的历史验证和外部项目调查。
+
+若代码、测试和文档不一致，应先确认任务是在修复实现还是更新公开契约，再同步所有受影响面。
+项目只保留 `AGENTS.md`、`CONFIGURATION.md`、`README.md` 三个 Markdown 文件，不要为计划、
+调查记录或临时说明新增 Markdown。
 
 ## 1. 项目定位
 
-iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工具，主要面向 Linux、
-群晖等 NAS 环境。它没有 Web 页面，也不监听业务端口；容器前台进程是定时调度器，管理工作
-通过 `icloudharbor` 命令完成。
+iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NAS 环境；本地 Python 环境
+仅用于开发、测试和构建。项目没有 Web 页面，也不监听业务端口；容器前台进程是定时调度器，
+管理工作通过 `icloudharbor` 命令完成。
 
 项目只做“远端到本地”的备份：
 
@@ -22,7 +44,7 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 2. 当前支持范围
 
-当前版本为 `0.3.4`，支持：
+当前源码版本为 `0.3.5`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
@@ -33,15 +55,21 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
   持久化交给容器后台并退出；下载过程统一显示在主容器日志。
 - `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码；成功后同样
   请求后台立即同步。
-- 普通 Docker 参数用整数小时配置同步间隔；高级 YAML 支持 Cron、增量游标与定期全量扫描。
+- 普通 Docker 参数只接受 `6`、`12`、`24` 三种整数小时；高级 YAML 支持其他间隔、Cron、
+  增量游标与定期全量扫描。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
+- 原始资源和转换 JPEG 的文件修改时间统一恢复为 iCloud 拍摄时间，全量扫描会校正历史文件。
 - 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
-- 企业微信兼容 icloudpd 的四个媒体 ID，并按真实 Cookie 到期时间提前 7 天每日提醒一次。
-- 每次同步任务结束都发送结果通知，包括首次、手动、调度以及没有新文件的成功同步；通知
-  没有独立定时器，认证临期只在同步时检查并单独按天去重。
+- 企业微信兼容 icloudpd 的四个媒体 ID。认证临期窗口可配置，默认提前 7 天，同一天只成功
+  提醒一次。
+- 首次、手动和调度的正式同步都会路由结果事件，包括没有新文件的成功同步；`DRY_RUN` 和
+  `SKIPPED_ALREADY_RUNNING` 不发送结果，实际发送还取决于通知开关和已启用渠道。
+- 通知没有独立定时器，认证临期只在同步时检查。启动通知按立即同步、延迟同步、后台请求或
+  下一次计划显示真实状态；普通正文使用中文状态、易读数据量和明确原因，Webhook 的结构化
+  payload 仍可携带 `error_code` 供自动化处理。
 - 容器 INFO 日志输出脱敏启动摘要，每个文件只显示一次“正在下载”，并汇总结果和下次任务；
   断点与内部资源信息仅在 DEBUG 输出。
 - amd64 与 arm64 Docker 构建。
@@ -58,6 +86,29 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 ## 3. 运行流程
 
+主要依赖方向如下：
+
+```text
+cli.py / scheduler.service
+            │
+            ▼
+       application.py
+       ├── auth.manager ───────────────┐
+       ├── photos.engine               │
+       │   ├── photos.policies/naming  │
+       │   ├── photos.planner          │
+       │   └── download.manager        │
+       ├── database.repository         │
+       ├── notify.base                 │
+       └── observability.*             │
+                                       ▼
+protocol.base + protocol.models ◄── protocol.pyicloud_adapter
+```
+
+`application.py` 是装配边界，CLI 和调度器不自行创建零散依赖。`photos/`、`download/`、`auth/`
+等业务层只依赖稳定协议模型和接口；只有 `protocol/pyicloud_adapter.py` 可以导入或接触
+`pyicloud` 对象。数据库访问统一经过 `StateRepository`，不要在业务模块散写 SQL。
+
 容器启动时依次执行：
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
@@ -66,6 +117,11 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
    最多运行一个认证或同步操作。
+
+`setup` 和 `session renew` 通常由 `docker compose exec` 启动为独立进程。`setup` 还会验证
+配置的图库和相册；`renew` 只使用已保存凭据重建认证。成功后两者都会增加 SQLite 同步请求
+代次，daemon 观察到新代次后重建协议对象并执行正式同步。因此交互命令退出不代表下载结束，
+下载进度属于 daemon 日志。
 
 一次同步依次经过：
 
@@ -99,9 +155,9 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 
 - `cli.py`：全部公开命令、交互认证和守护进程入口。
 - `application.py`：依赖装配中心，创建数据库、协议适配器、锁、健康检查和通知器。
-- `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束；固定行为
-  （挂载标记、下载块大小、校验、断点续传）为模块常量而非配置项。
-- `config/loader.py`：YAML 加载、首次生成、`IH_*` 覆盖、0.2→0.3 遗留参数自动迁移和原子写入。
+- `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束；挂载标记名与
+  下载块大小是固定常量，不是公开配置项。
+- `config/loader.py`：YAML 加载、首次生成、`IH_*` 覆盖、严格校验和原子写入。
 - `config/validation.py`：容量、时长等人类可读值解析。
 - `auth/manager.py`：认证状态与协议调用的协调。
 - `auth/session_store.py`：保存非敏感的认证状态元数据。
@@ -119,11 +175,11 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - `photos/naming.py`：安全路径渲染、跨平台字符清理和冲突处理。
 - `download/manager.py`：并发下载、断点续传、重试和原子落盘。
 - `download/postprocess.py`：文件权限、HEIC 转 JPEG 和 Synology Photos 索引触发。
-- `download/verifier.py`：大小与 SHA-256 校验。
+- `download/verifier.py`：始终计算本地大小与 SHA-256；远端提供有效期望值时再执行比较。
 - `download/retry.py`：带随机抖动的指数退避。
 - `database/models.py`：SQLite 数据结构，包括跨进程同步请求的代次状态。
 - `database/repository.py`：账号、图库、资源、运行记录、游标、锁和同步请求的数据访问。
-- `database/session.py`：SQLite 连接、WAL、外键和完整性检查。
+- `database/session.py`：SQLite 连接、WAL、外键、建表和完整性检查；当前没有独立迁移框架。
 - `scheduler/service.py`：Cron/间隔、启动时任务和进程内合并的立即任务。
 - `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥，以及崩溃残留租约恢复。
 - `notify/base.py`：通知事件路由和五种通知通道。
@@ -141,28 +197,41 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 ├── config.yaml
 ├── credentials/
 │   ├── vault.key
-│   └── personal.json
+│   └── <account-id>.json
 ├── database/
 │   └── icloudharbor.db
 ├── sessions/
-│   └── personal/
+│   └── <account-id>/
+│       ├── harbor-auth-state.json
+│       └── ...                     # pyicloud Cookie/Session
+├── notification-keys/
+│   └── wecom-secret                # 仅在配置企业微信时存在
 ├── locks/
 └── tmp/
 
 /photos/
-└── personal/
-    └── .icloudharbor-mounted
+├── .icloudharbor-mounted
+└── YYYY/MM/DD/...                  # 默认命名模板
 ```
 
 重要约束：
 
 - `/config` 与 `/photos` 必须持久化。
-- `destination.path` 必须位于照片卷内，默认 `/photos/personal`。
-- 挂载标记是防止卷未挂载时误写容器层的保护，不得省略。
+- bootstrap 生成的 `destination.path` 是 `/photos`，对应宿主机 `IH_PHOTOS_PATH` 根目录；
+  账号 ID 默认直接使用 `IH_APPLE_ID`，不会创建同名照片子目录。显式设置 `IH_ACCOUNT_ID`
+  才会覆盖该 ID；账号 ID 同时用于 SQLite、Session 目录和凭据文件名。
+- README 的标准群晖示例映射是 `/volume1/docker/icloudharbor` → `/config`、
+  `/volume2/photos/iCloud` → `/photos`，挂载标记位于
+  `/volume2/photos/iCloud/.icloudharbor-mounted`。
+- 受支持的生产布局应把下载目标放在 `/photos` 卷内。当前 Pydantic 模型不强制路径前缀，
+  预检只验证配置目标本身，因此不要误把“代码接受任意路径”当作受支持的 Docker 布局。
+- 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
+  通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
-- Apple Cookie/Session 由底层协议库保存，当前未加密；整个 `/config` 应按敏感数据保护。
+- Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`
+  应按敏感数据保护，日志或 Issue 中不得上传其原文。
 
 ## 6. 不可破坏的生产规则
 
@@ -172,69 +241,101 @@ iCloudHarbor 是一个只运行在 Docker 中的 iCloud Photos 本地备份工�
 - 不得让业务模块直接导入 `pyicloud`；协议变化只能在 `protocol/` 内处理。
 - 不得在部分下载失败后提交同步游标。
 - 正式文件必须由已校验的同文件系统 `.part` 文件原子替换。
-- 配置必须保持 `extra="forbid"`，未知参数应报错而不是静默忽略。
+- `DownloadManager` 在 `os.replace()` 前先写入数据库提交意图是故障恢复设计：进程在两步间
+  退出时，下次计划会发现正式文件缺失并修复确定路径。不要随意颠倒这两个操作。
+- SHA-256 总会为本地文件计算并保存，但仅在 Apple 返回有效 SHA-256 时比较；远端大小为空时
+  也不能伪造期望值。
+- 配置必须保持 `extra="forbid"`，未知参数和已删除的旧参数应报错，不得静默忽略或恢复未经
+  明确要求的迁移兼容。
 - 新增 Docker 参数时，必须同步更新 loader、Compose、`.env.example`、测试和
-  `CONFIGURATION.md`。
+  `CONFIGURATION.md`；若影响首次部署或日常命令，还要更新 `README.md`。
+- 数据库当前只有 `create_all()`，没有 Alembic 等迁移框架。修改既有表结构前必须设计旧库
+  升级路径，并用旧 schema/旧数据库夹具验证，不能只让全新数据库测试通过。
+- 后处理顺序必须保证原始资源和转换 JPEG 最终都以 iCloud `created_at` 作为 mtime；
+  Synology Photos 兼容 touch 不能把最终时间留成下载时刻。
 - 项目只保留 `AGENTS.md`、`CONFIGURATION.md`、`README.md` 三个 Markdown 文件。
 
-## 7. 开发与发布检查
+## 7. 变更导航与验证
 
-在仓库根目录执行：
+先按改动类型确定联动面，不要只修改最先搜到的文件：
+
+| 改动类型 | 主要实现 | 至少检查的测试与文档 |
+| --- | --- | --- |
+| Apple 认证、字段或资源兼容 | `protocol/base.py`、`models.py`、`exceptions.py`、`pyicloud_adapter.py` | `test_protocol_adapter.py`、认证集成测试；不得把底层对象扩散到业务层 |
+| 配置字段或 Docker 参数 | `config/models.py`、`loader.py`、Compose、`.env.example` | `test_config.py`、`CONFIGURATION.md`；新手流程受影响时同步 `README.md` |
+| `setup`、续期或后台交接 | `cli.py`、`application.py`、`auth/`、repository 的请求代次、scheduler | `test_auth_and_cli.py`、`test_scheduler.py`、`test_security.py`、README 命令 |
+| 扫描、筛选、命名或游标 | `photos/engine.py`、`planner.py`、`policies.py`、`naming.py` | `test_sync_engine.py`、`test_policies.py`、`test_naming.py`；复核失败时不提交游标 |
+| 下载、校验、时间戳或转换 | `download/`、planner 的修复判定 | `test_sync_engine.py`、`test_postprocess.py`；复核 `.part`、原子替换和 mtime |
+| SQLite 模型、锁或调度 | `database/`、`scheduler/` | `test_repository.py`、`test_scheduler.py`、集成测试；必须考虑旧库升级 |
+| 通知、日志或用户可见路径 | `notify/`、`application.py`、`observability/` | `test_notify.py`、`test_observability.py`；检查脱敏、开关和结构化 payload |
+| 依赖、镜像或发布 | `pyproject.toml`、`uv.lock`、Dockerfile、Compose、CI | Python 3.12/3.13、两套 Compose 配置、amd64/arm64 构建 |
+
+开发环境使用 Python 3.12 或 3.13 与 `uv`。首次安装依赖：
 
 ```bash
 uv sync --frozen --extra dev
+```
+
+按风险先运行聚焦测试，例如：
+
+```bash
+uv run pytest tests/unit/test_config.py
+uv run pytest tests/unit/test_protocol_adapter.py
+uv run pytest tests/integration/test_auth_and_cli.py
+uv run pytest tests/integration/test_sync_engine.py
+```
+
+发布前完整门禁：
+
+```bash
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src/icloudharbor
 uv run pytest --cov=icloudharbor --cov-report=term-missing
 uv build
-docker compose config
+docker compose config --quiet
+docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet
 docker build .
 ```
 
+Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example` 复制测试值。不得使用不带
+`--quiet` 的 `docker compose config`，否则 `env_file` 内容可能被展开到终端。
+
 提交前还必须：
 
-- 扫描仓库中可能的邮箱、密码、Apple Cookie、私钥和 `.env`。
-- 确认 Git 只包含源码、测试、三份 Markdown、许可证和构建/部署元数据。
+- 用 `git diff --check` 检查空白错误，确认只包含任务范围内的改动。
+- 扫描 diff 和未跟踪文件中的邮箱、密码、Apple Cookie、私钥、通知令牌和 `.env`。
 - 确认 shell 文件为 LF，镜像以非 root 账号运行，Compose 未增加业务端口。
-- 确认 README 中的命令可以从一个全新克隆目录执行。
+- 从全新配置视角复核 README 命令、宿主机路径、容器路径和挂载标记是否互相一致。
+- 自动化测试不得连接真实 Apple 服务；真实账号验证只能由维护者在受控环境执行。
 
-## 8. 当前验证状态
+## 8. 已验证事实与风险
+
+以下带日期内容是历史验证快照，不替代当前分支测试结果；修改后必须重新运行与改动匹配的检查：
 
 - 已在 Synology Docker 环境完成真实 Apple Account 双重认证和个人图库下载闭环。
 - 已验证中国大陆服务区域、星号密码输入、Session 续期、配置自动生成和下载目录保护。
 - 已验证真实日期范围样本能完成照片资源下载。
-- 2026-07-30 的 0.2.0 发布检查：103 项自动化测试全部通过，覆盖率 81%；包含多图库、
-  相册、尺寸、HEIC 转换、权限、调度延迟和通知回归测试。
 - 2026-07-30 的 0.3.0 参数精简：删除 11 个伪参数、合并 4 组重叠参数（photo_version→
-  photo_size、interval→schedule、no_changes→success、umask→固定 0022），旧 `.env` 与
-  `config.yaml` 自动迁移或警告忽略；108 项测试、Ruff 与严格 mypy 全部通过。
+  photo_size、interval→schedule、no_changes→success、umask→固定 0022）。0.3.0 当时提供过
+  迁移提示；当前版本已经删除兼容逻辑，旧 YAML 键会被 `extra="forbid"` 拒绝。
 - 2026-07-31 的 0.3.4 交互改进：认证命令通过 SQLite 请求代次把首次/续期同步交给 daemon，
   下载日志统一进入主容器；新手同步参数恢复为纯数字小时，默认 24 小时并在启动时检查。
   130 项测试通过，覆盖率 80%，Ruff、格式检查与严格 mypy 全部通过。
-- Ruff、格式检查、严格 mypy、源码包/Wheel 构建和未引用代码扫描通过。
-- 锁定的生产依赖经漏洞数据库审计未发现已知漏洞。
+- 2026-07-31 的 0.3.5 时间戳、通知与账号 ID 改进：下载资源和转换 JPEG 的文件修改时间恢复
+  为 iCloud 拍摄时间，群晖索引兼容处理后不再保留下载时间，全量扫描会校正历史文件；启动与
+  同步结果通知按真实状态使用可读中文文案；默认账号 ID 直接使用 `IH_APPLE_ID`。145 项测试
+  通过，覆盖率 81%，Ruff、格式检查与严格 mypy 全部通过。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
 `protocol/pyicloud_adapter.py` 添加兼容和回归测试，不能把底层对象泄露到业务层。
 
 
-## 9. 发布与 icloudpd 认证流程调查
-
-以下结论于 2026-07-31 核对，`icloudpd` 指
-[`boredazfcuk/docker-icloudpd`](https://github.com/boredazfcuk/docker-icloudpd)，源码提交为
-`e2d9aa01abe97f669fec6517cd44a251621d7560`，容器版本为 `1.0.1369_30-05-2026`，
-其中固定 `icloudpd 1.32.3`。
-
-### 9.1 GitHub 到 Docker Hub
+## 9. 发布规则
 
 - `.github/workflows/ci.yml` 会在每次 push 和 PR 上测试及构建，但只有 Git ref 以
   `refs/tags/v` 开头时才登录并推送 Docker Hub。普通 `git push` 不发布镜像。
-- `v0.3.3` 生成 `0.3.3`、`0.3`、`latest` 和 `sha-d741f2b` 四个标签。调查时四者均指向
-  清单摘要 `sha256:b289da7980cb2f4e50af635c681c095c54dfceb5ee1f3825f4a895c5fccc7f82`，
-  OCI 标签中的版本为 `0.3.3`、revision 为 `d741f2bd5a67a3855dd251f992a975d0e2e1b31b`；
-  amd64 和 arm64 均已发布。因此当时的群晖旧版本不是发布端仍为 0.3.2。
 - `latest` 只是可变标签。`docker compose up -d` 不负责查询远端更新，群晖下载新镜像后也不会
   自动替换已经运行的旧容器。升级必须依次执行 `docker compose pull` 和
   `docker compose up -d --force-recreate --remove-orphans`，再以容器内
@@ -243,13 +344,22 @@ docker build .
   `docker-compose.build.yml`，运行的不是 Docker Hub 镜像。若私有仓库拉取失败，Docker
   也可能继续保留旧本地镜像，应先 `docker login` 并检查 pull 输出。仍取得旧摘要时再排查
   registry mirror 或代理缓存。
-- 发布时应先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，创建带说明的版本标签，
-  并只推送目标标签，例如 `git push origin v0.3.4`。不要使用 `git push --tags`：本地存在而
-  远端已不存在的旧标签可能重新触发发布并把 `latest` 回退。
+- 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
+  `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
+- 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
+  `git push origin v0.3.5`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。
 
-### 9.2 icloudpd 如何等待初始化
+## 10. icloudpd 认证调查附录
+
+以下结论只用于解释既有设计决策，不是 iCloudHarbor 的运行契约。它们于 2026-07-31 基于
+[`boredazfcuk/docker-icloudpd`](https://github.com/boredazfcuk/docker-icloudpd) 提交
+`e2d9aa01abe97f669fec6517cd44a251621d7560`、容器 `1.0.1369_30-05-2026`（固定
+`icloudpd 1.32.3`）核对；若要依赖上游当前行为，必须重新检查最新源码。
+
+### 10.1 icloudpd 如何等待初始化
 
 - 容器的 `launcher.sh` 最终 `exec` 前台 `sync-icloud.sh`。它不是在主容器进程的标准输入上
   等待密码或验证码，而是检查 `/config` 中的持久化文件。
@@ -263,7 +373,7 @@ docker build .
 - 所以它采用的是“两个进程通过 `/config` 文件交接”的方式，不是 `docker up -d` 后把同一个
   交互终端挂起。后台进程只消费 keyring/Cookie，`docker exec -it` 进程负责生产它们。
 
-### 9.3 icloudpd 的 `--Initialise`
+### 10.2 icloudpd 的 `--Initialise`
 
 - 没有 keyring 时，`--Initialise` 先执行 `icloud --username ...`，由 keyring 后端询问并保存
   Apple 密码；然后把已有 Cookie/Session 移为备份，执行
@@ -275,7 +385,7 @@ docker build .
 - `--Initialise` 进程自身不进入长期下载循环，因为参数分支通过 `run_action` 在 Cookie 生成后
   退出；真正的同步仍由容器前台已有进程执行。
 
-### 9.4 icloudpd 的 `reauth.sh`
+### 10.3 icloudpd 的 `reauth.sh`
 
 - `reauth.sh` 从 `/config/icloudpd.conf` 读取运行用户、Apple ID 和中国区认证开关，删除当前
   Cookie 及 `.session`，再以配置的非 root 用户执行
@@ -292,7 +402,7 @@ docker build .
   同样没有在退出前验证新 Cookie。iCloudHarbor 必须继续以协议认证状态和实际访问检查作为
   成功条件。
 
-### 9.5 与 iCloudHarbor 的对应关系
+### 10.4 与 iCloudHarbor 的对应关系
 
 - iCloudHarbor 的前台进程始终是独立调度器；没有凭据或 Session 时，容器日志会明确提示
   `docker exec -it icloudharbor icloudharbor setup`。交互进程通过 SQLite 请求代次与后台

@@ -12,9 +12,10 @@ from icloudharbor.cli import (
     _dispatch_pending_sync_requests,
     _log_auth_guidance,
     _run_daemon_sync,
+    _startup_notification,
     app,
 )
-from icloudharbor.config.models import AccountConfig, AppConfig
+from icloudharbor.config.models import AccountConfig, AppConfig, ScheduleConfig
 from icloudharbor.photos.engine import SyncExecution
 from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.models import AuthStatus
@@ -154,6 +155,36 @@ def test_daemon_sync_acknowledges_request_and_refreshes_protocol(
     assert calls == [("personal", True)]
     assert application.repository.ack_sync_request("personal", request.generation) is False
     assert application.repository.pending_sync_requests("personal") == []
+
+
+def test_startup_notification_describes_immediate_sync(app_config: AppConfig) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    account = app_config.accounts[0]
+    scheduler = SchedulerService(app_config, lambda _: None)
+
+    event = _startup_notification(application, account, scheduler)
+
+    assert event.title == "iCloudHarbor 容器已启动"
+    assert event.message == "账号：测试图库\n正在检查 iCloud，有新内容时会自动下载。"
+    assert "等待下一次" not in event.message
+
+
+def test_startup_notification_shows_next_run_when_startup_sync_is_disabled(
+    app_config: AppConfig,
+) -> None:
+    application = HarborApplication(app_config, protocol_factory=lambda _: FakeProtocol())
+    account = app_config.accounts[0]
+    account.sync.run_on_start = False
+    account.sync.schedule = ScheduleConfig(interval="24h")
+    scheduler = SchedulerService(app_config, lambda _: None)
+    scheduler.start()
+    try:
+        event = _startup_notification(application, account, scheduler)
+    finally:
+        scheduler.shutdown()
+
+    assert event.title == "iCloudHarbor 容器已启动"
+    assert event.message.startswith("账号：测试图库\n下一次同步：")
 
 
 def test_daemon_sync_retains_request_when_account_is_already_running(

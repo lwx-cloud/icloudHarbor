@@ -23,6 +23,9 @@ MOUNTED_MARKER = ".icloudharbor-mounted"
 DOWNLOAD_CHUNK_SIZE = 1_000_000
 """Fixed streaming chunk size (1MB) for downloads and checksum verification."""
 
+ACCOUNT_ID_MAX_BYTES = 220
+"""Leave room for credential and lock suffixes under 255-byte path component limits."""
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
@@ -180,7 +183,7 @@ class DownloadConfig(StrictModel):
 
 
 class AccountConfig(StrictModel):
-    id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+    id: str = Field(min_length=1, max_length=ACCOUNT_ID_MAX_BYTES)
     name: str
     apple_id: str
     region: Literal["auto", "global", "china"] = "auto"
@@ -193,11 +196,33 @@ class AccountConfig(StrictModel):
     sync: SyncConfig = Field(default_factory=SyncConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
 
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        value = value.strip()
+        unsafe = '<>:"/\\|?*'
+        if (
+            not value
+            or value in {".", ".."}
+            or value.endswith(".")
+            or any(character.isspace() for character in value)
+            or any(character in unsafe or ord(character) < 32 for character in value)
+            or len(value.encode("utf-8")) > ACCOUNT_ID_MAX_BYTES
+        ):
+            raise ValueError("账号 id 必须是安全的文件名，可直接使用 Apple Account 邮箱")
+        return value
+
     @field_validator("apple_id")
     @classmethod
     def validate_apple_id(cls, value: str) -> str:
         value = value.strip()
-        if "@" not in value or value.startswith("@") or value.endswith("@"):
+        if (
+            value.count("@") != 1
+            or value.startswith("@")
+            or value.endswith("@")
+            or any(character.isspace() or ord(character) < 32 for character in value)
+            or len(value.encode("utf-8")) > ACCOUNT_ID_MAX_BYTES
+        ):
             raise ValueError("apple_id 格式无效")
         return value
 
