@@ -216,4 +216,5 @@ class DownloadManager:
             ErrorCode.NETWORK_TIMEOUT,
             ErrorCode.DOWNLOAD_URL_EXPIRED,
             ErrorCode.DATA_INTEGRITY_ERROR,
+            ErrorCode.UNKNOWN_PROTOCOL_ERROR,
         }

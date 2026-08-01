@@ -44,7 +44,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.3.9`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.3.10`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -362,6 +362,10 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   重复文件。
 - 2026-08-01 的 0.3.9 同轮冲突跳过：同一 sync 轮次内多个 Asset 竞争相同路径时，
   第二个直接跳过（下轮认领），不再重命名产生 _AssetID 副本。
+- 2026-08-01 的 0.3.10 错误映射修复与默认串行下载：修复 pyicloud 丢失 HTTP response
+  导致限流/服务不可用被误判为 UNKNOWN_PROTOCOL_ERROR 而不可重试的问题；_response_status
+  增加 exc.code 整数回退识别 HTTP 状态码；UNKNOWN_PROTOCOL_ERROR 纳入可重试集合；
+  兜底错误消息包含原始异常详情；默认并发下载数从 2 降为 1（串行），降低 Apple 限流概率。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -384,7 +388,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.3.9`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.3.10`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

@@ -627,7 +627,14 @@ class PyicloudProtocolAdapter(ICloudProtocol):
     @staticmethod
     def _response_status(exc: Exception) -> int | None:
         value = getattr(getattr(exc, "response", None), "status_code", None)
-        return value if isinstance(value, int) else None
+        if isinstance(value, int):
+            return value
+        # pyicloud's _raise_request_exception stores the HTTP status in
+        # exc.code but omits exc.response; use that as a fallback.
+        code = getattr(exc, "code", None)
+        if isinstance(code, int):
+            return code
+        return None
 
     @staticmethod
     def _map_exception(exc: Exception) -> ProtocolError:
@@ -656,6 +663,6 @@ class PyicloudProtocolAdapter(ICloudProtocol):
         if status == 404:
             return ProtocolError("远端资源不存在", ErrorCode.REMOTE_NOT_FOUND)
         return ProtocolError(
-            f"Apple 协议调用失败：{type(exc).__name__}",
+            f"Apple 协议调用失败：{type(exc).__name__}；详情：{exc}",
             ErrorCode.UNKNOWN_PROTOCOL_ERROR,
         )

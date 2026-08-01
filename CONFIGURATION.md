@@ -170,7 +170,7 @@
 
 | 参数名（YAML 路径） | 必填 | 默认值 | 可选值或格式 | 说明 |
 | --- | --- | --- | --- | --- |
-| `IH_DOWNLOAD_CONCURRENCY`（`accounts[].download.concurrency`） | 否 | `2` | `1`–`8` 的整数 | 设置同时下载的资源数。 |
+| `IH_DOWNLOAD_CONCURRENCY`（`accounts[].download.concurrency`） | 否 | `1` | `1`–`8` 的整数 | 设置同时下载的资源数。 |
 | `IH_DOWNLOAD_TIMEOUT`（`accounts[].download.timeout`） | 否 | `300` | `1`–`3600` 秒 | 设置单次下载请求超时。 |
 | `IH_MAX_RETRIES`（`accounts[].download.max_retries`） | 否 | `5` | `0`–`20` 的整数 | 设置下载失败后的重试次数。 |
 
@@ -437,7 +437,7 @@ accounts:
       download_delay: 0
 
     download:
-      concurrency: 2
+      concurrency: 1
       timeout: 300
       max_retries: 5
 
