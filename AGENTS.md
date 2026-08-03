@@ -78,7 +78,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。普通 Docker 配置使用
   `IH_NOTIFY` 总开关和 `IH_NOTIFY_TYPE` 单渠道选择；五类渠道都可直接从 `.env` 配置，只有
   多渠道或逐事件开关才使用高级 YAML。
-- 企业微信兼容 icloudpd 的四个大写 `MEDIA_ID_*` 参数。认证临期窗口可配置，默认提前 7 天，
+- 企业微信支持四个大写 `MEDIA_ID_*` 参数。认证临期窗口可配置，默认提前 7 天，
   同一天只成功提醒一次。
 - 首次、手动请求和调度的正式同步都会路由结果事件，包括没有新文件的成功同步；只读计划和
   `SKIPPED_ALREADY_RUNNING` 不发送结果，实际发送还取决于通知总开关和所选渠道。
@@ -277,7 +277,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
   时使用中文待填写提示，不得悄悄回退到可能造成权限问题的 `1000:1000`。
 - 以 root 运行且成功识别宿主机用户时，安装器把新建的 `config/`、`.env` 和
   `docker-compose.yaml` 交给该用户；容器入口只调整 `/config` 根目录与应用管理的子目录，
-  不得为模仿 icloudpd 而递归接管整个已有照片库或修改 NAS ACL。
+  不得递归接管整个已有照片库或修改 NAS ACL。
 - 安装器把执行命令时的部署目录和生成的 `config/` 固定为 `0777`，`.env` 与
   `docker-compose.yaml` 固定为 `0666`；即使无法从 root 会话识别真实用户，本机普通用户也
   必须能直接打开、修改、重命名或删除这些部署项目。
@@ -475,63 +475,3 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。
-
-## 10. icloudpd 认证调查附录
-
-以下结论只用于解释既有设计决策，不是 iCloudHarbor 的运行契约。它们于 2026-07-31 基于
-[`boredazfcuk/docker-icloudpd`](https://github.com/boredazfcuk/docker-icloudpd) 提交
-`e2d9aa01abe97f669fec6517cd44a251621d7560`、容器 `1.0.1369_30-05-2026`（固定
-`icloudpd 1.32.3`）核对；若要依赖上游当前行为，必须重新检查最新源码。
-
-### 10.1 icloudpd 如何等待初始化
-
-- 容器的 `launcher.sh` 最终 `exec` 前台 `sync-icloud.sh`。它不是在主容器进程的标准输入上
-  等待密码或验证码，而是检查 `/config` 中的持久化文件。
-- 缺少 `/config/python_keyring/keyring_pass.cfg` 时，前台脚本每 5 秒检查一次，最多等待
-  30 分钟。另一个 `docker exec -it icloudpd sync-icloud.sh --Initialise` 进程负责交互并
-  写入 keyring；前台看到文件后继续。超过 30 分钟仍没有文件便退出，由 Docker restart
-  policy 重新启动后再次等待。
-- keyring 已有但 MFA Cookie 缺失时，前台同样每 5 秒轮询 Cookie 文件，最多 30 分钟；
-  Cookie 只有基础会话而没有 `X-APPLE-WEBAUTH-HSA-TRUST` 时则轮询该认证标志。初始化进程
-  完成后，前台自然解除等待并进入下载循环。
-- 所以它采用的是“两个进程通过 `/config` 文件交接”的方式，不是 `docker up -d` 后把同一个
-  交互终端挂起。后台进程只消费 keyring/Cookie，`docker exec -it` 进程负责生产它们。
-
-### 10.2 icloudpd 的 `--Initialise`
-
-- 没有 keyring 时，`--Initialise` 先执行 `icloud --username ...`，由 keyring 后端询问并保存
-  Apple 密码；然后把已有 Cookie/Session 移为备份，执行
-  `icloudpd --auth-only --cookie-directory /config`，按需询问 MFA 验证码并生成新 Cookie。
-  脚本只在 Cookie 含受信任会话标志时报告成功，然后退出；已等待的前台进程继续同步。
-- 已有 keyring 时再次运行 `--Initialise`，不会再次询问或替换 Apple 密码。它直接复用 keyring
-  中的密码，备份现有 Cookie/Session，并强制重新执行认证和生成 Cookie。若 Apple 密码已经
-  修改，应先运行 `sync-icloud.sh --Remove-Keyring`，再运行 `--Initialise`。
-- `--Initialise` 进程自身不进入长期下载循环，因为参数分支通过 `run_action` 在 Cookie 生成后
-  退出；真正的同步仍由容器前台已有进程执行。
-
-### 10.3 icloudpd 的 `reauth.sh`
-
-- `reauth.sh` 从 `/config/icloudpd.conf` 读取运行用户、Apple ID 和中国区认证开关，删除当前
-  Cookie 及 `.session`，再以配置的非 root 用户执行
-  `icloudpd --auth-only --cookie-directory /config`。正常情况下它复用 keyring 密码，只在
-  Apple 要求时交互读取 MFA 验证码；若 keyring 缺失，底层密码提供器仍可能回退到终端询问
-  密码。
-- 该脚本只重建认证文件，不直接重启容器，也不直接启动一次照片同步。前台若正在等待 Cookie
-  会在文件出现后继续；若正在同步间隔休眠，则在下一轮使用新 Cookie。
-- 前台发现 Cookie 已过期或格式无效时会删除 Cookie、等待 5 分钟并退出，随后依靠 restart
-  policy 重启并等待新的 Cookie。若在这 5 分钟休眠期间运行 `reauth.sh`，旧前台不会立即
-  同步，仍要等它退出并重启；重启后可发现新 Cookie。
-- 上游的成功状态不能直接照搬：`--Initialise` 的 `run_action` 不检查 `generate_cookie`
-  结果，认证失败也可能打印 `Container initialisation complete` 并以 0 退出；`reauth.sh`
-  同样没有在退出前验证新 Cookie。iCloudHarbor 必须继续以协议认证状态和实际访问检查作为
-  成功条件。
-
-### 10.4 与 iCloudHarbor 的对应关系
-
-- iCloudHarbor 的前台进程始终是独立调度器；没有凭据或 Session 时，容器日志会明确提示
-  `docker exec -it icloudharbor icloudharbor setup`。交互进程通过 SQLite 请求代次与后台
-  交接，不依赖主容器标准输入或强制重启。
-- iCloudHarbor 的 `setup` 同时覆盖 icloudpd 的首次 `--Initialise` 和 `reauth.sh`：无本地凭据时重新询问
-  密码、保存 AES-256-GCM 凭据、完成 MFA 并检查图库/相册；已有凭据时清除旧 Session，复用保存的密码，
-  Apple 要求时只询问验证码。成功后写入持久化后台请求并退出，主 daemon 刷新协议对象后执行正式
-  同步，因此全部下载日志进入 `docker logs`。需要强制重新输入密码时，先运行 `reset` 再运行 `setup`。

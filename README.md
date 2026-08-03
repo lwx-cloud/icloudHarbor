@@ -7,6 +7,9 @@ iCloudHarbor 是面向 Linux 和 NAS 的 iCloud Photos Docker 备份工具。它
 Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文件校验、拍摄时间恢复以及
 安全的本地清理。
 
+本项目参考了 [docker-icloudpd](https://github.com/boredazfcuk/docker-icloudpd) 的容器化备份
+思路，但为独立实现。
+
 > 当前源码版本：`0.5.2`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
 
 [快速开始](#快速开始) · [通知](#通知) · [常用命令](#常用命令) ·
