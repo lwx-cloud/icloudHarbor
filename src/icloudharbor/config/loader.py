@@ -120,16 +120,45 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
 )
 
 NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
-    ("IH_NOTIFICATION_TITLE", ("title",), _identity),
-    ("IH_SILENT_NOTIFICATIONS", ("silent",), _parse_bool),
-    ("IH_NOTIFY_STARTUP", ("startup",), _parse_bool),
-    ("IH_NOTIFY_SUCCESS", ("success",), _parse_bool),
-    ("IH_NOTIFY_FAILURE", ("failure",), _parse_bool),
-    ("IH_NOTIFY_AUTH_REQUIRED", ("auth_required",), _parse_bool),
-    ("IH_NOTIFICATION_DAYS", ("notification_days",), _parse_int),
+    ("IH_NOTIFY_TITLE", ("title",), _identity),
+    ("IH_NOTIFY_SILENT", ("silent",), _parse_bool),
+    ("IH_NOTIFY_DAYS", ("notification_days",), _parse_int),
 )
 
-WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
+NOTIFICATION_TYPES = frozenset({"bark", "serverchan", "telegram", "wecom", "webhook"})
+NOTIFICATION_SECRET_FILES = {
+    "bark": "/config/notification-keys/bark-key",
+    "serverchan": "/config/notification-keys/serverchan-key",
+    "telegram": "/config/notification-keys/telegram-token",
+    "wecom": "/config/notification-keys/wecom-secret",
+    "webhook": "/config/notification-keys/webhook-secret",
+}
+NOTIFICATION_CHANNEL_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "IH_NOTIFY_TYPE",
+        "IH_NOTIFY_TITLE",
+        "IH_NOTIFY_SILENT",
+        "IH_NOTIFY_DAYS",
+        "IH_BARK_KEY",
+        "IH_BARK_SERVER",
+        "IH_SERVERCHAN_KEY",
+        "IH_TELEGRAM_TOKEN",
+        "IH_TELEGRAM_CHAT",
+        "IH_WECOM_CORP_ID",
+        "IH_WECOM_CORP_SECRET",
+        "IH_WECOM_AGENT_ID",
+        "IH_WECOM_TO_USER",
+        "IH_WECOM_PROXY",
+        "IH_WECOM_CONTENT_SOURCE_URL",
+        "IH_WECOM_NAME",
+        "MEDIA_ID_DOWNLOAD",
+        "MEDIA_ID_STARTUP",
+        "MEDIA_ID_WARNING",
+        "MEDIA_ID_EXPIRATION",
+        "IH_WEBHOOK_URL",
+        "IH_WEBHOOK_SECRET",
+    }
+)
 
 UNSUPPORTED_ENVIRONMENT_VARIABLES = frozenset(
     {
@@ -144,6 +173,15 @@ UNSUPPORTED_ENVIRONMENT_VARIABLES = frozenset(
         "IH_DOWNLOAD_PHOTOS",
         "IH_KEEP_UNICODE",
         "IH_UMASK",
+        "IH_NOTIFICATION_TITLE",
+        "IH_SILENT_NOTIFICATIONS",
+        "IH_NOTIFY_STARTUP",
+        "IH_NOTIFY_SUCCESS",
+        "IH_NOTIFY_FAILURE",
+        "IH_NOTIFY_AUTH_REQUIRED",
+        "IH_NOTIFICATION_DAYS",
+        "IH_WECOM_ID",
+        "IH_WECOM_SECRET",
         "MEDIA_ID_DELETE",
         "notification_days",
     }
@@ -251,66 +289,131 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
             sync["schedule"] = _parse_sync_interval(sync_interval)
 
     notifications = _mapping(data, "notifications")
-    _apply_mapping(notifications, NOTIFICATION_ENV_OVERRIDES)
-    _apply_wecom_environment(notifications)
+    _apply_notification_environment(notifications)
 
 
-def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
-    values = {
-        "corp_id": _environment_value("IH_WECOM_ID"),
-        "secret": _environment_value("IH_WECOM_SECRET"),
-        "agent_id": _environment_value("IH_WECOM_AGENT_ID"),
-        "to_user": _environment_value("IH_WECOM_TO_USER"),
-        "server": _environment_value("IH_WECOM_PROXY"),
-        "content_source_url": _environment_value("IH_WECOM_CONTENT_SOURCE_URL"),
-        "name": _environment_value("IH_WECOM_NAME"),
-        "media_id_download": _environment_value("media_id_download"),
-        "media_id_startup": _environment_value("media_id_startup"),
-        "media_id_warning": _environment_value("media_id_warning"),
-        "media_id_expiration": _environment_value("media_id_expiration"),
-    }
-    if not any(values.values()):
+def _apply_notification_environment(notifications: dict[str, Any]) -> None:
+    master = _environment_value("IH_NOTIFY")
+    configured = sorted(
+        name
+        for name in NOTIFICATION_CHANNEL_ENVIRONMENT_VARIABLES
+        if _environment_value(name) is not None
+    )
+    if master is None:
+        if configured:
+            raise ValueError("填写通知参数前必须设置 IH_NOTIFY=true 或 false")
         return
 
-    required = {
-        "IH_WECOM_ID": values["corp_id"],
-        "IH_WECOM_SECRET": values["secret"],
-        "IH_WECOM_AGENT_ID": values["agent_id"],
-        "IH_WECOM_TO_USER": values["to_user"],
-    }
-    missing = [name for name, value in required.items() if value is None]
-    if missing:
-        raise ValueError(f"企业微信 Docker 参数缺少：{', '.join(missing)}")
+    enabled = cast(
+        bool,
+        _parse_environment_value("IH_NOTIFY", master, _parse_bool),
+    )
+    _apply_mapping(notifications, NOTIFICATION_ENV_OVERRIDES)
 
-    channel: dict[str, object] = {
+    channel_type = _environment_value("IH_NOTIFY_TYPE")
+    if channel_type is not None:
+        channel_type = channel_type.strip().lower()
+        if channel_type not in NOTIFICATION_TYPES:
+            supported = "、".join(sorted(NOTIFICATION_TYPES))
+            raise ValueError(f"IH_NOTIFY_TYPE 只支持：{supported}")
+
+    if not enabled:
+        notifications.update(
+            {
+                "startup": False,
+                "success": False,
+                "failure": False,
+                "auth_required": False,
+                "channels": [],
+            }
+        )
+        return
+
+    if channel_type is None:
+        raise ValueError("IH_NOTIFY=true 时必须设置 IH_NOTIFY_TYPE")
+
+    notifications.update(
+        {
+            "startup": True,
+            "success": True,
+            "failure": True,
+            "auth_required": True,
+            "channels": [_notification_channel_from_environment(channel_type)],
+        }
+    )
+
+
+def _notification_channel_from_environment(channel_type: str) -> dict[str, object]:
+    if channel_type == "bark":
+        _require_notification_environment("IH_BARK_KEY")
+        channel: dict[str, object] = {
+            "type": "bark",
+            "device_key_file": NOTIFICATION_SECRET_FILES["bark"],
+        }
+        if server := _environment_value("IH_BARK_SERVER"):
+            channel["server"] = server
+        return channel
+
+    if channel_type == "serverchan":
+        _require_notification_environment("IH_SERVERCHAN_KEY")
+        return {
+            "type": "serverchan",
+            "send_key_file": NOTIFICATION_SECRET_FILES["serverchan"],
+        }
+
+    if channel_type == "telegram":
+        values = _require_notification_environment("IH_TELEGRAM_TOKEN", "IH_TELEGRAM_CHAT")
+        return {
+            "type": "telegram",
+            "token_file": NOTIFICATION_SECRET_FILES["telegram"],
+            "chat_id": values["IH_TELEGRAM_CHAT"],
+        }
+
+    if channel_type == "webhook":
+        values = _require_notification_environment("IH_WEBHOOK_URL")
+        channel = {"type": "webhook", "url": values["IH_WEBHOOK_URL"]}
+        if _environment_value("IH_WEBHOOK_SECRET") is not None:
+            channel["secret_file"] = NOTIFICATION_SECRET_FILES["webhook"]
+        return channel
+
+    values = _require_notification_environment(
+        "IH_WECOM_CORP_ID",
+        "IH_WECOM_CORP_SECRET",
+        "IH_WECOM_AGENT_ID",
+        "IH_WECOM_TO_USER",
+    )
+    channel = {
         "type": "wecom",
-        "enabled": True,
-        "corp_id": values["corp_id"],
-        "corp_secret_file": WECOM_SECRET_FILE,
+        "corp_id": values["IH_WECOM_CORP_ID"],
+        "corp_secret_file": NOTIFICATION_SECRET_FILES["wecom"],
         "agent_id": _parse_environment_value(
-            "IH_WECOM_AGENT_ID", values["agent_id"] or "", _parse_int
+            "IH_WECOM_AGENT_ID",
+            values["IH_WECOM_AGENT_ID"],
+            _parse_int,
         ),
-        "to_user": values["to_user"],
+        "to_user": values["IH_WECOM_TO_USER"],
     }
-    for key in (
-        "server",
-        "content_source_url",
-        "name",
-        "media_id_download",
-        "media_id_startup",
-        "media_id_warning",
-        "media_id_expiration",
-    ):
-        if values[key] is not None:
-            channel[key] = values[key]
+    optional = {
+        "server": "IH_WECOM_PROXY",
+        "content_source_url": "IH_WECOM_CONTENT_SOURCE_URL",
+        "name": "IH_WECOM_NAME",
+        "media_id_download": "MEDIA_ID_DOWNLOAD",
+        "media_id_startup": "MEDIA_ID_STARTUP",
+        "media_id_warning": "MEDIA_ID_WARNING",
+        "media_id_expiration": "MEDIA_ID_EXPIRATION",
+    }
+    for key, name in optional.items():
+        if value := _environment_value(name):
+            channel[key] = value
+    return channel
 
-    channels = notifications.setdefault("channels", [])
-    if not isinstance(channels, list):
-        raise ValueError("YAML notifications.channels 必须是数组")
-    channels[:] = [
-        item for item in channels if not isinstance(item, dict) or item.get("type") != "wecom"
-    ]
-    channels.append(channel)
+
+def _require_notification_environment(*names: str) -> dict[str, str]:
+    values = {name: _environment_value(name) for name in names}
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        raise ValueError(f"通知参数缺少：{', '.join(missing)}")
+    return {name: cast(str, value) for name, value in values.items()}
 
 
 def _environment_value(name: str) -> str | None:

@@ -7,16 +7,11 @@ services:
     # `.env.example` 已列出新手常用项；高级能力见 CONFIGURATION.md。
     env_file:
       - .env
-    # IH_AUTO_DELETE 等 IH_* 参数由上面的 .env 传入；缺省时保留 YAML 或程序默认值。
+    # IH_AUTO_DELETE、IH_NOTIFY 等参数由上面的 .env 传入。
 
     environment:
       - TZ=${IH_TIMEZONE:-UTC}
       - IH_CONFIG_FILE=/config/config.yaml
-      # 企业微信媒体 ID 使用与 icloudpd 一致的小写容器参数名。
-      - media_id_download=${MEDIA_ID_DOWNLOAD:-}
-      - media_id_startup=${MEDIA_ID_STARTUP:-}
-      - media_id_warning=${MEDIA_ID_WARNING:-}
-      - media_id_expiration=${MEDIA_ID_EXPIRATION:-}
 
     volumes:
       - "${IH_CONFIG_PATH:-./data/config}:/config"

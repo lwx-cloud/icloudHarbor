@@ -54,9 +54,9 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
-- `deploy/install.sh` 提供面向 Linux 和群晖 SSH 的 `curl | sudo bash` 自动安装：按平台选择
-  安全默认目录和参数，全新安装只通过 `/dev/tty` 询问 Apple Account，创建挂载标记、拉取并
-  启动生产镜像、运行 `status` 后，直接把 Apple 密码和验证码输入交给容器内的 `setup`。
+- `deploy/install.sh` 是无交互部署文件生成器：以执行命令时的当前目录为部署目录，只创建
+  `config/`、默认 `.env` 和 `docker-compose.yaml`，不检查 Docker、不创建配置子目录或照片
+  挂载标记，也不拉取镜像、启动容器、运行状态检查或认证。
 - `icloudharbor setup` 是唯一认证入口：首次以星号遮罩读取密码、完成认证并保存
   本地续期凭据；凭据已存在时自动续期，Apple 要求时只询问验证码。成功后向容器后台
   提交一次同步请求并退出，下载统一显示在主容器日志。
@@ -75,11 +75,13 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 可选 `IH_AUTO_DELETE` 本地清理，默认关闭；只扫描个人图库“最近删除”，按账号、图库和 Asset
   ID 精确匹配 SQLite 记录，并在删除前复核路径归属、文件类型、大小与 SHA-256。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
-- 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
-- 企业微信兼容 icloudpd 的四个媒体 ID。认证临期窗口可配置，默认提前 7 天，同一天只成功
-  提醒一次。
+- 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。普通 Docker 配置使用
+  `IH_NOTIFY` 总开关和 `IH_NOTIFY_TYPE` 单渠道选择；五类渠道都可直接从 `.env` 配置，只有
+  多渠道或逐事件开关才使用高级 YAML。
+- 企业微信兼容 icloudpd 的四个大写 `MEDIA_ID_*` 参数。认证临期窗口可配置，默认提前 7 天，
+  同一天只成功提醒一次。
 - 首次、手动请求和调度的正式同步都会路由结果事件，包括没有新文件的成功同步；只读计划和
-  `SKIPPED_ALREADY_RUNNING` 不发送结果，实际发送还取决于通知开关和已启用渠道。
+  `SKIPPED_ALREADY_RUNNING` 不发送结果，实际发送还取决于通知总开关和所选渠道。
 - 通知没有独立定时器，认证临期只在同步时检查。启动通知按立即同步、延迟同步、后台请求或
   下一次计划显示真实状态；普通正文使用中文状态、易读数据量和明确原因，Webhook 的结构化
   payload 仍可携带 `error_code` 供自动化处理。本地清理通知的摘要只显示数量和释放空间，详情
@@ -87,8 +89,9 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 首次未认证启动把“容器已启动”和“等待认证”合并为一条消息；同一认证问题使用 SQLite
   跨进程持久去重，容器重启和后续调度不会重复提醒。`setup` 首次认证或自动续期成功后发送
   `AUTH_RECOVERED`，明确后台同步请求已提交，并清除去重状态以允许未来新的认证问题再次提醒。
-  认证通知关闭而普通启动通知开启时，首次合并消息回退为 `APP_STARTED`；两个开关都关闭时
-  不发送。认证恢复、失效与临期仍由 `auth_required` 开关控制。
+  高级 YAML 中认证通知关闭而普通启动通知开启时，首次合并消息回退为 `APP_STARTED`；两个
+  开关都关闭时不发送。认证恢复、失效与临期仍由 `auth_required` 开关控制。Docker 简单模式
+  `IH_NOTIFY=true` 时统一开启启动、成功、失败和认证四类事件。
 - 容器 INFO 日志输出脱敏启动摘要，每个文件只显示一次“正在下载”，并汇总结果和下次任务；
   断点与内部资源信息仅在 DEBUG 输出。
 - amd64 与 arm64 Docker 构建。
@@ -131,7 +134,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 容器启动时依次执行：
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
-2. 调整 `/config` 内运行目录的属主与权限。
+2. 把 `/config` 根目录和应用管理的运行目录交给配置的非 root UID/GID，并收紧私有目录权限。
 3. 如果 `/config/config.yaml` 不存在，执行隐藏内部入口 `icloudharbor bootstrap`。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
@@ -167,10 +170,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `Dockerfile`：多阶段生产镜像；构建依赖与运行镜像分离。
 - `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置必需参数与持久化卷。
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
-- `deploy/install.sh`：幂等 Docker 自动安装/更新器；首次生成 root 管理的 `.env`，默认把
-  容器可写状态放在安装目录的 `data/config`。重跑必须保留所有现有配置和持久化数据，只更新
-  受管理的 Compose 文件与镜像；安装目录非空不得成为阻断条件。旧部署缺少 `.env` 时优先从
-  经过挂载和字段校验的同名现有容器恢复受支持参数，否则直接生成带默认参数的新 `.env`。
+- `deploy/install.sh`：无交互首次部署文件生成器；在当前目录创建 `config/`，覆盖生成默认
+  `.env` 和 `docker-compose.yaml`。它不是升级器或容器管理器，不读取旧容器和旧配置。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
@@ -256,7 +257,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - bootstrap 生成的 `destination.path` 是 `/photos`，对应宿主机 `IH_PHOTOS_PATH` 根目录；
   账号 ID 默认直接使用 `IH_APPLE_ID`，不会创建同名照片子目录。显式设置 `IH_ACCOUNT_ID`
   才会覆盖该 ID；账号 ID 同时用于 SQLite、Session 目录和凭据文件名。
-- README 的标准群晖示例映射是 `/volume1/docker/icloudharbor` → `/config`、
+- README 的标准群晖示例映射是 `/volume1/docker/icloudharbor/config` → `/config`、
   `/volume2/photos/iCloud` → `/photos`，挂载标记位于
   `/volume2/photos/iCloud/.icloudharbor-mounted`。
 - 受支持的生产布局应把下载目标放在 `/photos` 卷内。当前 Pydantic 模型不强制路径前缀，
@@ -264,23 +265,36 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
   通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
-- 一键安装器仅可从 `/dev/tty` 读取 Apple Account、密码和验证码；经管道执行时不得从标准
-  输入读取交互内容。安装路径、照片路径、UID/GID、时区、区域和同步间隔使用安全默认值或
-  调用者显式提供的 `IH_*` 环境变量，不再逐项询问或增加确认步骤。
-- 一键安装的控制目录和 `.env` 必须由 root 管理，不能把控制目录直接挂载为容器可写的
-  `/config`；Compose 项目名保存在安装器管理标记中，重跑时不得重新推断或任意改变。
-- 安装器只可调整自己新建的专用目录，不得递归 `chown` 已有照片库或擅自修改 NAS ACL。
-- 检测到已有 `.env` 时，安装器不得覆盖账号、路径、通知密钥或任何持久化内容；只能更新
-  Compose 文件、拉取镜像、重建容器并重新执行 `status`。
-- 已有安装目录缺少 `.env` 时不得因目录非空或无法识别旧 Compose 而停止；必须保留其他文件，
-  直接补齐默认 `.env` 和受管理部署文件；生成的 `.env` 必须通过 `COMPOSE_FILE` 固定受管理的
-  Compose 文件，避免旧名称文件影响后续命令。同名现有容器存在时优先从其 `/config`、
-  `/photos` 挂载和受支持环境参数恢复配置，不限制本地或发布镜像名称；不得复制系统环境或在
-  终端输出 Secret。只有管理文件类型冲突、危险路径、同名容器必要挂载无效等情况才可停止。
+- 一键安装器不得读取 `/dev/tty` 或标准输入，不得询问任何参数；只在结束时输出一次成功或
+  失败。安装目录固定为执行命令时的当前目录，不提供路径探测、旧项目识别或容器接管。
+- 安装器只创建当前目录的 `config/`，不得预建数据库、Session、凭据、锁等子目录，不得创建
+  照片目录或挂载标记，不得修改照片库属主和 NAS ACL。
+- 生成的 `.env` 固定包含 `IH_APPLE_ID`、`IH_CONFIG_PATH`、`IH_PHOTOS_PATH`、`IH_PUID`、
+  `IH_PGID`、`IH_TIMEZONE`、`IH_REGION`、`IH_SYNC_INTERVAL`、`IH_RUN_ON_START`、
+  `IH_PHOTO_SIZE`、`IH_NOTIFY` 十一项；配置目录是当前目录下的 `config/`，账号和照片路径使用
+  中文待填写提示，通知默认关闭，其余默认值分别为 Shanghai、auto、12、true、original。
+  UID/GID 优先使用执行 `sudo` 前的非 root 用户，其次使用当前目录的非 root 属主；都无法确认
+  时使用中文待填写提示，不得悄悄回退到可能造成权限问题的 `1000:1000`。
+- 以 root 运行且成功识别宿主机用户时，安装器把新建的 `config/`、`.env` 和
+  `docker-compose.yaml` 交给该用户；容器入口只调整 `/config` 根目录与应用管理的子目录，
+  不得为模仿 icloudpd 而递归接管整个已有照片库或修改 NAS ACL。
+- 安装器覆盖 `.env` 和 `docker-compose.yaml`，并清理旧安装器生成的 `.env.example`、
+  `docker-compose.yml` 与 `.icloudharbor-installer`；它不拉取镜像、不启动或重建容器、不执行
+  `status` 或 `setup`，也不用于升级已有部署。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
 - Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`
   应按敏感数据保护，日志或 Issue 中不得上传其原文。
+- Docker 通知参数必须以 `IH_NOTIFY=true/false` 作为唯一总开关；开启时必须通过
+  `IH_NOTIFY_TYPE` 在 `bark`、`serverchan`、`telegram`、`wecom`、`webhook` 中选择一个。
+  简单模式统一开启四类事件，不得重新增加四个事件环境变量或通过“任意渠道参数非空”隐式
+  开启。高级 YAML 可保留多渠道和 `startup/success/failure/auth_required` 精细开关。
+- 企业微信 Docker 字段必须与其 API 概念清晰对应：`IH_WECOM_CORP_ID`、
+  `IH_WECOM_CORP_SECRET`、`IH_WECOM_AGENT_ID`、`IH_WECOM_TO_USER`；不得仅为缩短名称而把
+  `AGENT_ID`、`TO_USER` 或 `CONTENT_SOURCE_URL` 改成含义不清的短词。
+- Bark、Server酱、Telegram、企业微信和 Webhook 的 Docker 密钥由入口脚本写入
+  `/config/notification-keys/` 并设为 `0600`；`config.yaml` 只能保存密钥文件路径，不得保存
+  环境变量中的 Secret 原文。
 
 ## 6. 不可破坏的生产规则
 
@@ -325,7 +339,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 | SQLite 模型、锁或调度 | `database/`、`scheduler/` | `test_repository.py`、`test_scheduler.py`、集成测试；必须考虑旧库升级 |
 | 通知、日志或用户可见路径 | `notify/`、`application.py`、`observability/` | `test_notify.py`、`test_observability.py`；检查脱敏、开关和结构化 payload |
 | 依赖、镜像或发布 | `pyproject.toml`、`uv.lock`、Dockerfile、Compose、CI | Python 3.12/3.13、两套 Compose 配置、amd64/arm64 构建 |
-| 一键安装与升级 | `deploy/install.sh`、Compose、`.env.example` | `bash -n`、ShellCheck（可用时）、管道输入与 `/dev/tty`、首次/重跑两条路径、README 命令 |
+| 首次部署文件生成 | `deploy/install.sh`、Compose | `bash -n`、ShellCheck（可用时）、空目录与含旧安装器文件的目录、README 命令 |
 
 开发环境使用 Python 3.12 或 3.13 与 `uv`。首次安装依赖：
 

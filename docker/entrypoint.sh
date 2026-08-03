@@ -27,6 +27,7 @@ usermod --non-unique --uid "$IH_RUNTIME_UID" --gid "$IH_RUNTIME_GID" \
 mkdir -p \
   /config/credentials /config/database /config/sessions /config/locks /config/tmp \
   /config/notification-keys
+chown "$IH_RUNTIME_UID:$IH_RUNTIME_GID" /config
 chown -R "$IH_RUNTIME_UID:$IH_RUNTIME_GID" \
   /config/credentials /config/database /config/sessions /config/locks /config/tmp \
   /config/notification-keys
@@ -35,12 +36,22 @@ chown -R "$IH_RUNTIME_UID:$IH_RUNTIME_GID" \
   /config/credentials /config/database /config/sessions /config/locks /config/tmp \
   /config/notification-keys
 
-if [ -n "${IH_WECOM_SECRET:-}" ]; then
-  IH_WECOM_SECRET_PATH=/config/notification-keys/wecom-secret
-  printf '%s' "$IH_WECOM_SECRET" > "$IH_WECOM_SECRET_PATH"
-  chown "$IH_RUNTIME_UID:$IH_RUNTIME_GID" "$IH_WECOM_SECRET_PATH"
-  /usr/sbin/gosu "$IH_RUNTIME_UID:$IH_RUNTIME_GID" chmod 0600 "$IH_WECOM_SECRET_PATH"
-fi
+write_notification_secret() {
+  secret_value="$1"
+  secret_path="$2"
+  if [ -z "$secret_value" ]; then
+    return
+  fi
+  printf '%s' "$secret_value" > "$secret_path"
+  chown "$IH_RUNTIME_UID:$IH_RUNTIME_GID" "$secret_path"
+  /usr/sbin/gosu "$IH_RUNTIME_UID:$IH_RUNTIME_GID" chmod 0600 "$secret_path"
+}
+
+write_notification_secret "${IH_BARK_KEY:-}" /config/notification-keys/bark-key
+write_notification_secret "${IH_SERVERCHAN_KEY:-}" /config/notification-keys/serverchan-key
+write_notification_secret "${IH_TELEGRAM_TOKEN:-}" /config/notification-keys/telegram-token
+write_notification_secret "${IH_WECOM_CORP_SECRET:-}" /config/notification-keys/wecom-secret
+write_notification_secret "${IH_WEBHOOK_SECRET:-}" /config/notification-keys/webhook-secret
 
 IH_RUNTIME_CONFIG="${IH_CONFIG_FILE:-/config/config.yaml}"
 if [ ! -e "$IH_RUNTIME_CONFIG" ]; then
