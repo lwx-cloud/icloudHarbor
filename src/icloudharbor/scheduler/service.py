@@ -18,6 +18,8 @@ from icloudharbor.config.validation import parse_duration
 
 
 class SchedulerService:
+    LOCK_RETRY_SECONDS = 30
+
     def __init__(self, config: AppConfig, sync_callback: Callable[[str], object]) -> None:
         self.config = config
         self.sync_callback = sync_callback
@@ -112,11 +114,35 @@ class SchedulerService:
             if account_id in self._active_accounts:
                 return None
             self._active_accounts.add(account_id)
+        result: object | None = None
         try:
-            return self.sync_callback(account_id)
+            result = self.sync_callback(account_id)
         finally:
             with self._guard:
                 self._active_accounts.discard(account_id)
+        if getattr(result, "status", None) == "SKIPPED_ALREADY_RUNNING":
+            self._schedule_retry(account_id)
+        return result
+
+    def _schedule_retry(self, account_id: str) -> None:
+        with self._guard:
+            if account_id in self._active_accounts or account_id in self._queued_accounts:
+                return
+            self._queued_accounts.add(account_id)
+        try:
+            self.scheduler.add_job(
+                self._execute,
+                trigger="date",
+                run_date=datetime.now(ZoneInfo(self.config.runtime.timezone))
+                + timedelta(seconds=self.LOCK_RETRY_SECONDS),
+                args=[account_id],
+                id=f"sync-now:{account_id}",
+                replace_existing=True,
+            )
+        except Exception:
+            with self._guard:
+                self._queued_accounts.discard(account_id)
+            raise
 
     def shutdown(self, wait: bool = True) -> None:
         if self.scheduler.running:

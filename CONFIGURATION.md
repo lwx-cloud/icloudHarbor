@@ -43,7 +43,7 @@
 `IH_CONFIG_PATH`，最好也使用独立的 `IH_PHOTOS_PATH`。
 
 `0.3.5` 起所有下载资源和转换生成的 JPEG 都会把文件修改时间恢复为 iCloud 拍摄时间。
-升级前已下载的文件可执行一次 `icloudharbor sync run --full-scan` 校正，无需重新下载。
+定期全量扫描会自动校正升级前已下载的文件，无需重新下载或额外命令。
 
 ### 企业微信（可选）
 
@@ -167,7 +167,7 @@
 | `IH_FULL_SCAN_INTERVAL`（`accounts[].sync.full_scan_interval`） | 否 | `30d` | 时长，如 `12h`、`7d`、`4w` | 设置增量模式下定期完整扫描的间隔。 |
 | `IH_DOWNLOAD_DELAY`（`accounts[].sync.download_delay`） | 否 | `0` | `0`–`60` 的整数分钟 | 设置容器启动后首次同步的延迟。 |
 
-`IH_AUTO_DELETE=true` 时，每次正式同步和 `sync plan` 都会读取个人图库的“最近删除”。程序只按
+`IH_AUTO_DELETE=true` 时，每次正式同步和 `plan` 都会读取个人图库的“最近删除”。程序只按
 账号、图库和 iCloud Asset ID 查找自己记录过的本地文件，不会仅凭文件名删除；删除前还会确认
 路径仍在受管目录内、不是符号链接，并重新校验大小和 SHA-256。文件被本地修改、路径存在归属
 冲突或无法安全确认时，本轮会失败关闭并保留文件。共享图库的“最近删除”当前不会参与清理。
@@ -176,7 +176,7 @@ Apple 的“最近删除”只保留有限时间，因此已经从该相册永�
 开启前先保持持久配置为 `false`，备份 SQLite 和照片目录，再临时预览候选项：
 
 ```bash
-docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor sync plan
+docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor plan
 ```
 
 计划模式只展示、不删除文件。确认后再把 `.env` 改为 `IH_AUTO_DELETE=true` 并重建容器。
@@ -206,7 +206,7 @@ docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor sync plan
 已认证状态下的启动通知会根据实际配置显示“正在检查 iCloud”、延迟分钟数或下一次同步时间。
 首次未认证启动只发送一条“容器已启动，等待 Apple 认证”的合并消息，不再紧接着发送第二条
 认证失败消息。启用 `auth_required` 时，同一认证问题会在 SQLite 中持久去重，因此容器重启和
-后续调度都不会重复提醒；`setup` 或 `session renew` 成功后会发送认证恢复消息，说明后台同步
+后续调度都不会重复提醒；`setup` 完成首次认证或自动续期后会发送认证恢复消息，说明后台同步
 请求已提交，并重新允许未来新的认证问题触发提醒。关闭 `auth_required` 但开启 `startup` 时，
 合并消息仍作为普通启动消息发送；两个开关都关闭时不发送。同步成功但没有新文件时标题为
 “已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。开启本地清理且实际删除
@@ -253,7 +253,7 @@ Telegram 和企业微信正文最多列出 50 个文件名，超出部分提示�
 curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
 ```
 
-向导会询问本章的新手参数、创建挂载标记、启动容器并运行 `doctor`，随后可直接进入交互认证。
+向导会询问本章的新手参数、创建挂载标记、启动容器并运行 `status`，随后可直接进入交互认证。
 Apple 密码和验证码始终只由容器内的 `icloudharbor setup` 读取，不会写入 `.env` 或命令参数。
 重复运行安装器只更新 Compose 和镜像，不覆盖现有配置、数据库、Session、凭据或照片。下面是
 等价的手动部署步骤。一键安装默认把运行数据放在安装目录的 `data/config`，让 root 管理的
@@ -348,7 +348,8 @@ IH_ALBUMS=家庭,旅行
 IH_EXCLUDE_ALBUMS=屏幕快照
 ```
 
-认证后可用命令查看准确的相册名：`docker compose exec icloudharbor icloudharbor albums list --library root`。相册筛选必须全量扫描；同一照片属于多个所选相册时只下载一次。
+认证后可用 `docker compose exec icloudharbor icloudharbor list` 一次查看所有图库和相册的准确名称与 ID。
+相册筛选必须全量扫描；同一照片属于多个所选相册时只下载一次。
 
 ### 场景 5：HEIC 转成 JPEG 给老设备看
 
@@ -593,28 +594,29 @@ IH_FOLDER_STRUCTURE={library}/{created:%Y/%m}
 
 ## 七、常用管理命令
 
+公开命令只保留下面 7 个单词，不再使用多层子命令或日常操作参数：
+
+| 命令 | 作用 |
+| --- | --- |
+| `setup` | 首次运行时询问密码并建立认证；已有本地凭据时自动续期，Apple 要求时只问验证码。 |
+| `sync` | 向主容器提交一次后台同步请求；已有等待任务时不重复提交。 |
+| `plan` | 只读扫描 Apple 并列出下载、修复和本地删除候选；不下载、不删除、不通知、不写运行记录或游标。 |
+| `status` | 合并显示服务健康、认证、最近同步、调度和后台任务；只在异常时展开详情。 |
+| `list` | 一次列出所有可访问图库及其相册。 |
+| `backup` | 创建带 UTC 时间戳的 SQLite 在线备份，只输出备份路径。 |
+| `reset` | 确认后清除 Session、Cookie 和保存的密码；不删除照片、数据库或配置。 |
+
 ```bash
-# 查看自动生成的配置
-docker compose exec icloudharbor icloudharbor config show
-
-# 查看认证状态 / 续期（Apple 要求时只问验证码）
-docker compose exec icloudharbor icloudharbor session status
-docker compose exec icloudharbor icloudharbor session renew
-
-# 重新认证（密码或验证码失效时）
+docker compose exec icloudharbor icloudharbor status
+docker compose exec icloudharbor icloudharbor list
+docker compose exec icloudharbor icloudharbor plan
+docker compose exec icloudharbor icloudharbor sync
+docker compose exec icloudharbor icloudharbor backup
+docker compose exec icloudharbor icloudharbor reset
 docker compose exec icloudharbor icloudharbor setup
-
-# 手动同步一次 / 只看计划不下载
-docker compose exec icloudharbor icloudharbor sync run
-docker compose exec icloudharbor icloudharbor sync plan
-
-# 查看图库和相册的准确 ID/名称
-docker compose exec icloudharbor icloudharbor libraries list
-docker compose exec icloudharbor icloudharbor albums list --library root
-
-# 健康检查
-docker compose exec icloudharbor icloudharbor healthcheck
 ```
+
+`daemon`、`healthcheck` 和 `bootstrap` 是 Docker 内部入口，对普通帮助隐藏，不是日常管理命令。
 
 ---
 
@@ -644,7 +646,7 @@ docker compose exec icloudharbor icloudharbor healthcheck
 依次检查：① `channels` 有至少一个 `enabled: true` 的渠道；② 对应事件开关为 `true`；③ 密钥文件存在且容器 UID 可读；④ 企业微信应用允许该成员接收消息；⑤ 可信 IP/代理地址正确。
 
 **Apple 要求重新认证**
-先 `session renew`；仍需密码或验证码就重新 `setup`。
+直接运行 `setup`；已保存凭据时会自动续期。如果 Apple 密码已修改或凭据损坏，先运行 `reset`，再运行 `setup`。
 
 ---
 
@@ -683,7 +685,7 @@ docker compose exec icloudharbor icloudharbor healthcheck
 - `align_raw`（3 档）→ `IH_RAW_MODE`（5 档）；
 - `file_match_policy=name-id7` → `IH_CONFLICT_POLICY=always_asset_id`；
 - `webhook_server/port/path/id/https` 五个参数拼 URL → 一个 `url` 搞定；
-- `single_pass` → 需要单次执行时直接 `icloudharbor sync run`，常驻容器模型不变；
+- `single_pass` → 需要立即检查时使用 `icloudharbor sync` 提交一次后台任务，仍由常驻容器执行；
 - `albums_with_dates`/`libraries_with_dates` → 模板直接实现：`IH_FOLDER_STRUCTURE={album}/{created:%Y/%m/%d}`。
 - `auto_delete` → `IH_AUTO_DELETE`；只按 SQLite 中的 iCloud Asset ID 精确匹配，并在删除本地文件前
   重新校验路径和 SHA-256，不使用同名猜测。

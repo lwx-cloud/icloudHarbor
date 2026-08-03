@@ -51,6 +51,13 @@ class SyncExecution:
     deleted_files: tuple[str, ...] = ()
 
 
+@dataclass(slots=True, frozen=True)
+class SyncPreview:
+    plan: SyncPlan
+    asset_count: int
+    recently_deleted_count: int
+
+
 class PhotosEngine:
     STAGES = (
         "PRECHECK",
@@ -79,14 +86,64 @@ class PhotosEngine:
         self.locks = locks
         self.planner = AssetPlanner(repository)
 
+    def preview(self, account: AccountConfig) -> SyncPreview:
+        """Build a synchronization plan without changing persistent state."""
+        with self.locks.acquire(f"sync:{account.id}"):
+            self._precheck(account)
+            if self.protocol.auth_status() != AuthStatus.AUTHENTICATED:
+                raise AuthenticationRequired()
+
+            selected = self._select_libraries(account, self.protocol.list_libraries())
+            if not selected:
+                raise HarborError("配置的图库不存在或不可访问", ErrorCode.ACCESS_DENIED)
+
+            discovered_assets: list[RemoteAsset] = []
+            for library in selected:
+                assets, _, _ = self._scan_library(
+                    account,
+                    library.library_id,
+                    force_full_scan=False,
+                )
+                discovered_assets.extend(assets)
+
+            deleted_assets: list[RemoteAsset] = []
+            deletion_warnings: list[str] = []
+            if account.sync.auto_delete:
+                for library in selected:
+                    if library.library_id != "root":
+                        deletion_warnings.append(
+                            f"图库 {library.name} 暂不支持最近删除扫描，已跳过本地删除"
+                        )
+                        continue
+                    deleted_assets.extend(self.protocol.list_recently_deleted(library.library_id))
+
+            limited_assets = self._limit_assets(
+                account,
+                discovered_assets,
+                persist_adoptions=False,
+            )
+            plan = self.planner.build(
+                limited_assets,
+                account,
+                persist_adoptions=False,
+            )
+            plan.warnings.extend(deletion_warnings)
+            self.planner.add_local_deletions(
+                plan,
+                deleted_assets,
+                account,
+                {(asset.library_id, asset.asset_id) for asset in discovered_assets},
+            )
+            self._check_plan_space(account, plan)
+            return SyncPreview(plan, len(limited_assets), len(deleted_assets))
+
     def run(
         self,
         account: AccountConfig,
         *,
-        dry_run: bool = False,
         force_full_scan: bool = False,
     ) -> SyncExecution:
-        run_id = self.repository.create_run(account.id, dry_run=dry_run)
+        run_id = self.repository.create_run(account.id)
         plan = SyncPlan()
         lock_name = f"sync:{account.id}"
         try:
@@ -167,30 +224,21 @@ class PhotosEngine:
                 )
                 skip_note = f"（含 {len(plan.adoptions)} 个认领已有文件）" if plan.adoptions else ""
                 LOGGER.info(
-                    f"扫描完成：项目={len(limited_assets)}；待下载={plan.download_count}；"
-                    f"已存在={len(plan.skips)}{skip_note}；"
+                    f"扫描完成：iCloud 项目={len(limited_assets)}；"
+                    f"待下载文件={plan.download_count}；"
+                    f"已存在文件={len(plan.skips)}{skip_note}；"
                     f"待删除本地文件={plan.local_delete_count}；"
                     f"预计数据={plan.estimated_bytes} 字节"
                 )
+                if plan.unmatched_deleted_count:
+                    LOGGER.info(
+                        f"最近删除：匹配 {plan.local_delete_asset_count} 个项目、"
+                        f"{plan.local_delete_count} 个本地文件；另有 "
+                        f"{plan.unmatched_deleted_count} 个项目没有本地记录，已忽略"
+                    )
                 for warning in plan.warnings:
                     self._event(run_id, "PLAN_WARNING", warning, severity="WARNING")
                 self._check_plan_space(account, plan)
-
-                if dry_run:
-                    self.repository.finish_run(
-                        run_id,
-                        status="DRY_RUN",
-                        skipped_count=len(plan.skips),
-                    )
-                    return SyncExecution(
-                        run_id,
-                        "DRY_RUN",
-                        0,
-                        len(plan.skips),
-                        0,
-                        0,
-                        plan,
-                    )
 
                 report = DownloadManager(self.protocol, self.repository, account).execute(plan)
                 for outcome in report.outcomes:
@@ -385,6 +433,8 @@ class PhotosEngine:
         self,
         account: AccountConfig,
         assets: list[RemoteAsset],
+        *,
+        persist_adoptions: bool = True,
     ) -> list[RemoteAsset]:
         ordered = sorted(
             assets,
@@ -399,7 +449,11 @@ class PhotosEngine:
         selected: list[RemoteAsset] = []
         consecutive_existing = 0
         for asset in ordered:
-            preview = self.planner.build([asset], account)
+            preview = self.planner.build(
+                [asset],
+                account,
+                persist_adoptions=persist_adoptions,
+            )
             selected.append(asset)
             if preview.download_count == 0 and preview.skips:
                 consecutive_existing += 1

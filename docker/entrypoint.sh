@@ -44,7 +44,7 @@ fi
 
 IH_RUNTIME_CONFIG="${IH_CONFIG_FILE:-/config/config.yaml}"
 if [ ! -e "$IH_RUNTIME_CONFIG" ]; then
-  /app/.venv/bin/icloudharbor config bootstrap
+  /app/.venv/bin/icloudharbor bootstrap
 fi
 
 if [ -e "$IH_RUNTIME_CONFIG" ]; then

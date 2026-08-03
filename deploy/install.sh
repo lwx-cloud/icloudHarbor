@@ -456,9 +456,9 @@ deploy_container() {
     success "容器已启动：$version_output"
 
     info "正在检查数据库、目录、挂载标记、权限和剩余空间"
-    if ! compose exec -T "$SERVICE_NAME" icloudharbor doctor; then
+    if ! compose exec -T "$SERVICE_NAME" icloudharbor status; then
         compose logs --tail=100 "$SERVICE_NAME" || true
-        die "安装检查未通过；请按 doctor 输出修复权限、ACL 或剩余空间后重新运行。"
+        die "安装检查未通过；请按 status 输出修复权限、ACL 或剩余空间后重新运行。"
     fi
 }
 

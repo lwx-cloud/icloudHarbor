@@ -519,8 +519,6 @@ class StateRepository:
         self,
         account_id: str,
         library_id: str | None = None,
-        *,
-        dry_run: bool = False,
     ) -> str:
         run_id = str(uuid.uuid4())
         with self.database.sessions.begin() as session:
@@ -530,7 +528,7 @@ class StateRepository:
                     account_id=account_id,
                     library_id=library_id,
                     mode="backup",
-                    dry_run=dry_run,
+                    dry_run=False,
                 )
             )
         return run_id

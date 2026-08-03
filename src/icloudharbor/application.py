@@ -21,10 +21,10 @@ from icloudharbor.database.session import Database
 from icloudharbor.notify import NotificationEvent, NotifierHub
 from icloudharbor.notify.base import NotificationType
 from icloudharbor.observability.health import HealthService
-from icloudharbor.photos.engine import PhotosEngine, SyncExecution
+from icloudharbor.photos.engine import PhotosEngine, SyncExecution, SyncPreview
 from icloudharbor.photos.planner import SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
-from icloudharbor.protocol.exceptions import ErrorCode, HarborError
+from icloudharbor.protocol.exceptions import AuthenticationRequired, ErrorCode, HarborError
 from icloudharbor.protocol.models import AuthResult, AuthStatus
 from icloudharbor.protocol.pyicloud_adapter import PyicloudProtocolAdapter
 from icloudharbor.scheduler.locks import LockCoordinator
@@ -33,7 +33,7 @@ from icloudharbor.security.credentials import CredentialStore
 ProtocolFactory = Callable[[AccountConfig], ICloudProtocol]
 LOGGER = structlog.get_logger(__name__)
 SYNC_ERROR_MESSAGES = {
-    "AUTH_REQUIRED": "Apple 会话已失效，请运行 session renew；未保存本地凭据时请重新运行 setup。",
+    "AUTH_REQUIRED": "Apple 会话已失效，请运行 icloudharbor setup。",
     "TERMS_REQUIRED": "Apple 要求接受新的服务条款，请先登录 iCloud 网页完成处理。",
     "WEB_ACCESS_DISABLED": "Apple Account 未开启网页访问 iCloud 数据。",
     "ADP_APPROVAL_REQUIRED": "Apple 高级数据保护阻止了访问，需要先在受信任设备上批准。",
@@ -188,7 +188,6 @@ class HarborApplication:
         self,
         account: AccountConfig,
         *,
-        dry_run: bool = False,
         force_full_scan: bool = False,
         authenticate: bool = True,
         refresh_protocol: bool = False,
@@ -217,11 +216,11 @@ class HarborApplication:
                     self.repository,
                     self.database,
                     self.locks,
-                ).run(account, dry_run=dry_run, force_full_scan=force_full_scan)
+                ).run(account, force_full_scan=force_full_scan)
         except HarborError as exc:
             if exc.code != ErrorCode.ALREADY_RUNNING:
                 raise
-            result = self._record_skipped_sync(account, exc)
+            result = self._skipped_sync(exc)
         elapsed = int(time.monotonic() - started)
         LOGGER.info(
             f"同步结束：状态={result.status}；下载={result.downloaded_count}；"
@@ -249,27 +248,22 @@ class HarborApplication:
         self._notify_sync(account, result)
         return result
 
-    def _record_skipped_sync(
-        self,
-        account: AccountConfig,
-        exc: HarborError,
-    ) -> SyncExecution:
-        run_id = self.repository.create_run(account.id)
-        self.repository.finish_run(
-            run_id,
-            status="SKIPPED_ALREADY_RUNNING",
-            error_code=exc.code.value,
-        )
-        self.repository.add_event(
-            run_id,
-            "SKIPPED_ALREADY_RUNNING",
-            str(exc),
-            severity="INFO",
-            payload={"error_code": exc.code.value},
-        )
+    def preview_sync(self, account: AccountConfig) -> SyncPreview:
+        with self.account_operation(account):
+            if self.ensure_session(account) != AuthStatus.AUTHENTICATED:
+                raise AuthenticationRequired()
+            return PhotosEngine(
+                self.protocol(account),
+                self.repository,
+                self.database,
+                self.locks,
+            ).preview(account)
+
+    @staticmethod
+    def _skipped_sync(exc: HarborError) -> SyncExecution:
         LOGGER.info("已有账号操作正在运行，本次不重复启动")
         return SyncExecution(
-            run_id,
+            "",
             "SKIPPED_ALREADY_RUNNING",
             0,
             0,
@@ -306,7 +300,8 @@ class HarborApplication:
                 f"{self.config.notifications.title} 认证即将到期",
                 (
                     f"账号：{account.name}\n"
-                    f"认证将在 {days_remaining} 天内到期，请运行 session renew。"
+                    f"认证将在 {days_remaining} 天内到期，"
+                    "请运行 icloudharbor setup。"
                 ),
                 {
                     "account_id": account.id,
@@ -332,7 +327,7 @@ class HarborApplication:
         )
 
     def _notify_sync(self, account: AccountConfig, result: SyncExecution) -> None:
-        if result.status in {"DRY_RUN", "SKIPPED_ALREADY_RUNNING"}:
+        if result.status == "SKIPPED_ALREADY_RUNNING":
             return
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED

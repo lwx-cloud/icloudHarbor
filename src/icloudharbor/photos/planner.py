@@ -41,6 +41,7 @@ class SyncPlan:
     remote_delete_candidates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     local_deletions: list[LocalDeletionTask] = field(default_factory=list)
+    unmatched_deleted_count: int = 0
 
     @property
     def download_count(self) -> int:
@@ -54,12 +55,22 @@ class SyncPlan:
     def local_delete_count(self) -> int:
         return sum(task.file_count for task in self.local_deletions)
 
+    @property
+    def local_delete_asset_count(self) -> int:
+        return len(self.local_deletions)
+
 
 class AssetPlanner:
     def __init__(self, repository: StateRepository) -> None:
         self.repository = repository
 
-    def build(self, assets: list[RemoteAsset], account: AccountConfig) -> SyncPlan:
+    def build(
+        self,
+        assets: list[RemoteAsset],
+        account: AccountConfig,
+        *,
+        persist_adoptions: bool = True,
+    ) -> SyncPlan:
         plan = SyncPlan()
         namer = PathNamer(account)
         reserved: set[Path] = set()
@@ -99,13 +110,14 @@ class AssetPlanner:
                     # 重新下载并重命名(旧行为)远比认领更差.
                     if relative not in reserved and candidate.is_file():
                         sha256_hash = file_sha256(candidate)
-                        self.repository.record_download(
-                            asset,
-                            resource,
-                            str(relative).replace("\\", "/"),
-                            candidate.stat().st_size,
-                            sha256_hash,
-                        )
+                        if persist_adoptions:
+                            self.repository.record_download(
+                                asset,
+                                resource,
+                                str(relative).replace("\\", "/"),
+                                candidate.stat().st_size,
+                                sha256_hash,
+                            )
                         task = DownloadTask(asset, resource, relative)
                         plan.skips.append(task)
                         plan.adoptions.append(task)
@@ -113,7 +125,7 @@ class AssetPlanner:
                         continue
                     # Same-run conflict: another resource already claimed this path.
                     # Skip instead of renaming — the skipped resource will be
-                    # adopted from disk on the next sync run.
+                    # adopted from disk during the next formal synchronization.
                     if relative in reserved:
                         continue
                     # Disk conflict: path exists as something other than a regular
@@ -147,9 +159,7 @@ class AssetPlanner:
                 asset.asset_id,
             )
             if not local_files:
-                plan.warnings.append(
-                    f"最近删除 Asset {asset.asset_id}（{asset.filename}）没有可验证的本地记录"
-                )
+                plan.unmatched_deleted_count += 1
                 continue
             plan.local_deletions.append(LocalDeletionTask(asset, tuple(local_files)))
 

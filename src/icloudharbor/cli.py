@@ -5,14 +5,12 @@ from __future__ import annotations
 import os
 import signal
 import threading
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import structlog
 import typer
-import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from icloudharbor import __version__
@@ -20,15 +18,13 @@ from icloudharbor.application import HarborApplication
 from icloudharbor.config.loader import (
     bootstrap_config,
     config_path_from_env,
-    config_snapshot,
-    load_config,
 )
 from icloudharbor.config.models import AccountConfig
 from icloudharbor.notify import NotificationEvent
 from icloudharbor.notify.base import NotificationType
 from icloudharbor.observability.logging import configure_logging
 from icloudharbor.observability.startup import log_startup_summary, startup_summary
-from icloudharbor.photos.engine import SyncExecution
+from icloudharbor.photos.engine import SyncExecution, SyncPreview
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError
 from icloudharbor.protocol.models import AssetQuery, AuthResult, AuthStatus
 from icloudharbor.scheduler.service import SchedulerService
@@ -58,24 +54,8 @@ app = typer.Typer(
     name="icloudharbor",
     help="可靠地将 iCloud Photos 备份到本地磁盘或 NAS。",
     no_args_is_help=True,
+    add_completion=False,
 )
-config_app = typer.Typer(help="配置校验和查看。")
-accounts_app = typer.Typer(help="查看已配置账号。")
-session_app = typer.Typer(help="Apple 会话创建、续期和清理。")
-credentials_app = typer.Typer(help="本地保存凭据的状态和清理。")
-libraries_app = typer.Typer(help="查看远端图库。")
-albums_app = typer.Typer(help="查看远端相册。")
-sync_app = typer.Typer(help="生成计划或执行同步。")
-database_app = typer.Typer(help="SQLite 状态库维护。")
-
-app.add_typer(config_app, name="config")
-app.add_typer(accounts_app, name="accounts")
-app.add_typer(session_app, name="session")
-app.add_typer(credentials_app, name="credentials")
-app.add_typer(libraries_app, name="libraries")
-app.add_typer(albums_app, name="albums")
-app.add_typer(sync_app, name="sync")
-app.add_typer(database_app, name="database")
 
 
 def _version(value: bool) -> None:
@@ -114,12 +94,8 @@ def _echo_configuration_error(prefix: str, exc: Exception) -> None:
     typer.echo(f"iCloudHarbor {__version__} {prefix}：{redact(exc)}", err=True)
 
 
-def _account(instance: HarborApplication, account_id: str | None) -> AccountConfig:
-    try:
-        return instance.config.account(account_id)
-    except ValueError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(2) from exc
+def _account(instance: HarborApplication) -> AccountConfig:
+    return instance.config.account()
 
 
 def _display_apple_id(instance: HarborApplication, account: AccountConfig) -> str:
@@ -133,8 +109,8 @@ def _container_name() -> str:
 
 
 def _auth_command(instance: HarborApplication, account: AccountConfig) -> str:
-    action = "session renew" if instance.credential_store(account).exists() else "setup"
-    return f"docker exec -it {_container_name()} icloudharbor {action}"
+    del instance, account
+    return f"docker exec -it {_container_name()} icloudharbor setup"
 
 
 def _log_auth_guidance(
@@ -155,18 +131,8 @@ def _log_auth_guidance(
     LOGGER.warning("输入密码和验证码的命令退出后，后台会自动开始同步；请继续查看本容器日志")
 
 
-@config_app.command("validate")
-def config_validate(ctx: typer.Context) -> None:
-    try:
-        config = load_config(ctx.obj)
-    except Exception as exc:
-        _echo_configuration_error("配置无效", exc)
-        raise typer.Exit(2) from exc
-    typer.echo(f"配置有效：version={config.version}，账号数={len(config.accounts)}")
-
-
-@config_app.command("bootstrap")
-def config_bootstrap(ctx: typer.Context) -> None:
+@app.command("bootstrap", hidden=True)
+def bootstrap(ctx: typer.Context) -> None:
     """Generate the initial YAML from Docker environment parameters."""
 
     try:
@@ -178,27 +144,6 @@ def config_bootstrap(ctx: typer.Context) -> None:
         typer.echo(f"已自动生成配置：{ctx.obj}（账号数={len(config.accounts)}）")
     else:
         typer.echo(f"现有配置有效：{ctx.obj}（未覆盖）")
-
-
-@config_app.command("show")
-def config_show(ctx: typer.Context) -> None:
-    try:
-        typer.echo(config_snapshot(load_config(ctx.obj)))
-    except Exception as exc:
-        typer.echo(f"无法读取配置：{exc}", err=True)
-        raise typer.Exit(2) from exc
-
-
-@accounts_app.command("list")
-def accounts_list(ctx: typer.Context) -> None:
-    instance = _load_application(ctx)
-    for account in instance.config.accounts:
-        status = instance.repository.get_auth_status(account.id).value
-        enabled = "启用" if account.enabled else "禁用"
-        typer.echo(
-            f"{account.id}\t{enabled}\t{_display_apple_id(instance, account)}\t认证={status}\t"
-            f"目标={account.destination.path}"
-        )
 
 
 def _authenticate_account(
@@ -239,99 +184,120 @@ def _password(account: AccountConfig) -> str:
     return password
 
 
-@app.command("setup")
-def setup(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
+def _validate_photos_access(
+    instance: HarborApplication,
+    account: AccountConfig,
 ) -> None:
-    """Authenticate, persist credentials, and request the first background sync."""
+    protocol = instance.protocol(account)
+    libraries = protocol.list_libraries()
+    by_selector = {
+        selector: library
+        for library in libraries
+        for selector in (library.library_id, library.name)
+    }
+    missing = [selector for selector in account.libraries if selector not in by_selector]
+    if missing:
+        typer.echo(f"图库不可访问：{', '.join(missing)}", err=True)
+        raise typer.Exit(1)
+    for selector in account.libraries:
+        library = by_selector[selector]
+        album_id = None
+        configured_albums = [*account.filters.albums, *account.filters.exclude_albums]
+        if configured_albums:
+            albums = protocol.list_albums(library.library_id)
+            by_album = {key: album for album in albums for key in (album.album_id, album.name)}
+            missing_albums = [name for name in configured_albums if name not in by_album]
+            if missing_albums:
+                typer.echo(
+                    f"图库 {library.name} 中相册不可访问：{', '.join(missing_albums)}",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            if account.filters.albums:
+                album_id = by_album[account.filters.albums[0]].album_id
+        protocol.list_assets(
+            AssetQuery(
+                account.id,
+                library.library_id,
+                album_id=album_id,
+                limit=1,
+            )
+        )
+        typer.echo(f"  {library.name}: ok")
+
+
+def _request_background_sync(
+    instance: HarborApplication,
+    account: AccountConfig,
+) -> bool:
+    if instance.repository.pending_sync_requests(account.id):
+        return False
+    instance.repository.request_sync(account.id)
+    return True
+
+
+@app.command("setup")
+def setup(ctx: typer.Context) -> None:
+    """建立或续期 Apple 认证。"""
 
     instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    typer.echo("***** iCloudHarbor 初始化 *****")
+    account = _account(instance)
+    credential_store = instance.credential_store(account)
+    renewal = credential_store.exists()
+    heading = "***** iCloudHarbor 认证续期 *****" if renewal else "***** iCloudHarbor 初始化 *****"
+    typer.echo(heading)
     for line in startup_summary(instance.config, account, ctx.obj):
         typer.echo(f"  {line}")
 
     health = instance.health.readiness()
-    typer.echo("1/5 配置、数据库和下载目录检查")
+    typer.echo("配置、数据库和下载目录检查")
     for name, result in health.checks.items():
         typer.echo(f"  {name}: {result}")
     if not health.ok:
         typer.echo("设置停止：请先修复以上本地检查。", err=True)
         raise typer.Exit(2)
 
+    password: str | None = None
     try:
         with instance.account_operation(account):
-            typer.echo("2/5 Apple Account 密码与双重认证")
-            password = _password(account)
+            if renewal:
+                try:
+                    password = credential_store.read()
+                except (OSError, ValueError) as exc:
+                    typer.echo(f"无法读取本地凭据：{exc}", err=True)
+                    typer.echo("请先运行 icloudharbor reset，再重新运行 setup。", err=True)
+                    raise typer.Exit(2) from exc
+                if password is None:
+                    typer.echo("本地凭据不完整，请先运行 icloudharbor reset。", err=True)
+                    raise typer.Exit(2)
+                typer.echo("正在使用本地保存的密码续期 Apple 会话。")
+            else:
+                typer.echo("Apple Account 密码与双重认证")
+                password = _password(account)
+
             instance.auth_manager(account).logout()
             _authenticate_account(instance, account, password)
 
-            typer.echo("3/5 保存本地续期凭据")
-            try:
-                instance.credential_store(account).write(password)
-            except (OSError, ValueError) as exc:
-                typer.echo(f"无法保存本地凭据：{exc}", err=True)
-                raise typer.Exit(1) from exc
-            finally:
-                password = ""
-            typer.echo("  凭据: AES-256-GCM / 文件权限 0600")
+            if not renewal:
+                typer.echo("iCloud Photos 访问检查")
+                try:
+                    _validate_photos_access(instance, account)
+                except typer.Exit:
+                    raise
+                except Exception as exc:
+                    typer.echo(f"iCloud Photos 检查失败：{exc}", err=True)
+                    raise typer.Exit(1) from exc
 
-            typer.echo("4/5 iCloud Photos 访问检查")
-            try:
-                protocol = instance.protocol(account)
-                libraries = protocol.list_libraries()
-                by_selector = {
-                    selector: library
-                    for library in libraries
-                    for selector in (library.library_id, library.name)
-                }
-                missing = [
-                    selector for selector in account.libraries if selector not in by_selector
-                ]
-                if missing:
-                    typer.echo(f"图库不可访问：{', '.join(missing)}", err=True)
-                    raise typer.Exit(1)
-                for selector in account.libraries:
-                    library = by_selector[selector]
-                    album_id = None
-                    configured_albums = [
-                        *account.filters.albums,
-                        *account.filters.exclude_albums,
-                    ]
-                    if configured_albums:
-                        albums = protocol.list_albums(library.library_id)
-                        by_album = {
-                            key: album for album in albums for key in (album.album_id, album.name)
-                        }
-                        missing_albums = [
-                            name for name in configured_albums if name not in by_album
-                        ]
-                        if missing_albums:
-                            typer.echo(
-                                f"图库 {library.name} 中相册不可访问：{', '.join(missing_albums)}",
-                                err=True,
-                            )
-                            raise typer.Exit(1)
-                        if account.filters.albums:
-                            album_id = by_album[account.filters.albums[0]].album_id
-                    protocol.list_assets(
-                        AssetQuery(
-                            account.id,
-                            library.library_id,
-                            album_id=album_id,
-                            limit=1,
-                        )
-                    )
-                    typer.echo(f"  {library.name}: ok")
-            except typer.Exit:
-                raise
-            except Exception as exc:
-                typer.echo(f"iCloud Photos 检查失败：{exc}", err=True)
-                raise typer.Exit(1) from exc
+                typer.echo("保存本地续期凭据")
+                try:
+                    credential_store.write(password)
+                except (OSError, ValueError) as exc:
+                    typer.echo(f"无法保存本地凭据：{exc}", err=True)
+                    raise typer.Exit(1) from exc
+                typer.echo("  凭据: AES-256-GCM / 文件权限 0600")
 
             try:
-                instance.repository.request_sync(account.id)
+                submitted = _request_background_sync(instance, account)
             except Exception as exc:
                 typer.echo(f"认证已完成，但无法通知后台同步：{exc}", err=True)
                 raise typer.Exit(1) from exc
@@ -340,101 +306,37 @@ def setup(
             raise
         typer.echo("当前账号正在同步或认证，请等待其结束后重新运行 setup。", err=True)
         raise typer.Exit(1) from exc
-
-    instance.notify_auth_recovered(account)
-    typer.echo("5/5 设置完成，已通知容器后台开始首次同步")
-    typer.echo("  当前认证命令现在退出；下载由主容器继续执行。")
-    typer.echo(f"  查看下载日志：docker logs -f {_container_name()}")
-
-
-@session_app.command("renew")
-def session_renew(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
-    """Renew the saved session and request an immediate background sync."""
-
-    instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    password: str | None = None
-    try:
-        with instance.account_operation(account):
-            try:
-                password = instance.credential_store(account).read()
-            except (OSError, ValueError) as exc:
-                typer.echo(f"无法读取本地凭据：{exc}", err=True)
-                raise typer.Exit(2) from exc
-            if password is None:
-                typer.echo("尚未保存密码，请先运行 icloudharbor setup。", err=True)
-                raise typer.Exit(2)
-            instance.auth_manager(account).logout()
-            typer.echo("旧 Session 已清除，正在使用本地凭据续期。")
-            _authenticate_account(instance, account, password)
-            try:
-                instance.repository.request_sync(account.id)
-            except Exception as exc:
-                typer.echo(f"认证已完成，但无法通知后台同步：{exc}", err=True)
-                raise typer.Exit(1) from exc
-    except HarborError as exc:
-        if exc.code != ErrorCode.ALREADY_RUNNING:
-            raise
-        typer.echo("当前账号正在同步或认证，请等待其结束后重新运行 session renew。", err=True)
-        raise typer.Exit(1) from exc
     finally:
         password = ""
-    instance.notify_auth_recovered(account, renewal=True)
-    typer.echo("续期完成，已通知容器后台同步。")
-    typer.echo(f"当前认证命令现在退出；查看下载日志：docker logs -f {_container_name()}")
+
+    instance.notify_auth_recovered(account, renewal=renewal)
+    action = "续期完成" if renewal else "设置完成"
+    queue_state = "后台同步任务已提交" if submitted else "后台已有同步任务"
+    typer.echo(f"{action}，{queue_state}。")
+    typer.echo(f"查看日志：docker logs -f {_container_name()}")
 
 
-@session_app.command("status")
-def session_status(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
+@app.command("reset")
+def reset(ctx: typer.Context) -> None:
+    """清除 Apple Session 和本地保存的密码。"""
+
     instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    typer.echo(instance.repository.get_auth_status(account.id).value)
-
-
-@session_app.command("clear")
-def session_clear(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
-    instance = _load_application(ctx)
-    account = _account(instance, account_id)
+    account = _account(instance)
+    typer.echo("将清除 Apple Session、Cookie 和本地保存的密码。")
+    typer.echo("不会删除已下载照片、SQLite 数据库或配置。")
+    if not typer.confirm("继续"):
+        typer.echo("已取消。")
+        return
     try:
         with instance.account_operation(account):
             instance.auth_manager(account).logout()
+            instance.credential_store(account).clear()
     except HarborError as exc:
         if exc.code != ErrorCode.ALREADY_RUNNING:
             raise
-        typer.echo("当前账号正在同步或认证，请等待其结束后再清除 Session。", err=True)
+        typer.echo("当前正在同步或认证，请等待结束后再运行 reset。", err=True)
         raise typer.Exit(1) from exc
-    typer.echo("Session、Cookie 和本地认证状态已清除；保存的密码未删除。")
-
-
-@credentials_app.command("status")
-def credentials_status(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
-    instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    status = "SAVED" if instance.credential_store(account).exists() else "MISSING"
-    typer.echo(status)
-
-
-@credentials_app.command("clear")
-def credentials_clear(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
-    instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    removed = instance.credential_store(account).clear()
-    typer.echo("本地保存的密码已删除。" if removed else "没有找到本地保存的密码。")
+    typer.echo("认证信息已清除；下次运行 setup 时会重新询问密码。")
 
 
 def _ensure_remote_session(instance: HarborApplication, account: AccountConfig) -> None:
@@ -444,152 +346,151 @@ def _ensure_remote_session(instance: HarborApplication, account: AccountConfig) 
         typer.echo(f"无法恢复 Apple 会话：{exc}", err=True)
         raise typer.Exit(1) from exc
     if status != AuthStatus.AUTHENTICATED:
-        typer.echo("需要先执行 icloudharbor setup 或 icloudharbor session renew。", err=True)
+        typer.echo("需要先执行 icloudharbor setup。", err=True)
         raise typer.Exit(1)
 
 
-@libraries_app.command("list")
-def libraries_list(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-) -> None:
+@app.command("list")
+def list_remote(ctx: typer.Context) -> None:
+    """列出所有可访问图库及其相册。"""
+
     instance = _load_application(ctx)
-    account = _account(instance, account_id)
+    account = _account(instance)
     _ensure_remote_session(instance, account)
-    for library in instance.protocol(account).list_libraries():
-        typer.echo(f"{library.library_id}\t{library.name}\t{library.library_type}")
+    protocol = instance.protocol(account)
+    libraries = protocol.list_libraries()
+    if not libraries:
+        typer.echo("没有可访问的图库。")
+        return
+    for library in libraries:
+        typer.echo(f"图库：{library.name} [{library.library_id}]")
+        albums = protocol.list_albums(library.library_id)
+        if not albums:
+            typer.echo("  相册：无")
+            continue
+        for album in albums:
+            typer.echo(f"  相册：{album.name} [{album.album_id}]")
 
 
-@albums_app.command("list")
-def albums_list(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-    library_id: Annotated[str, typer.Option("--library", "-l")] = "root",
-) -> None:
-    instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    _ensure_remote_session(instance, account)
-    for album in instance.protocol(account).list_albums(library_id):
-        typer.echo(f"{album.album_id}\t{album.name}\t{album.album_type}")
-
-
-def _show_plan(result: SyncExecution) -> None:
+def _show_preview(result: SyncPreview) -> None:
     plan = result.plan
-    typer.echo(f"运行 ID：{result.run_id}")
-    typer.echo(f"状态：{result.status}")
-    typer.echo(f"待下载：{plan.download_count}")
+    typer.echo(
+        f"计划：扫描 {result.asset_count} 个 iCloud 项目；"
+        f"下载 {plan.download_count} 个文件；"
+        f"已有 {len(plan.skips)} 个文件；"
+        f"删除 {plan.local_delete_count} 个本地文件"
+    )
     typer.echo(f"预计数据：{plan.estimated_bytes} 字节")
-    typer.echo(f"已存在：{len(plan.skips)}")
-    typer.echo(f"待删除本地文件：{plan.local_delete_count}")
-    for task in plan.local_deletions:
-        typer.echo(f"  删除候选：{task.asset.filename}（Asset {task.asset.asset_id}）")
+    for task in plan.downloads:
+        typer.echo(f"  下载：{task.relative_path.as_posix()}")
+    for task in plan.updates:
+        typer.echo(f"  修复：{task.relative_path.as_posix()}")
+    for deletion_task in plan.local_deletions:
+        for local_file in deletion_task.local_files:
+            typer.echo(f"  删除：{local_file.relative_path}")
+            for artifact in local_file.artifacts:
+                typer.echo(f"  删除：{artifact.root}/{artifact.relative_path}")
+    if plan.unmatched_deleted_count:
+        typer.echo(
+            f"最近删除共 {result.recently_deleted_count} 个项目；"
+            f"其中 {plan.unmatched_deleted_count} 个没有本地记录，已忽略。"
+        )
     for warning in plan.warnings:
         typer.echo(f"警告：{warning}")
 
 
-@sync_app.command("plan")
-def sync_plan(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-    full_scan: Annotated[bool, typer.Option("--full-scan")] = False,
-) -> None:
+@app.command("plan")
+def plan(ctx: typer.Context) -> None:
+    """只读预览下载、修复和本地删除候选。"""
+
     instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    result = instance.run_sync(account, dry_run=True, force_full_scan=full_scan)
-    _show_plan(result)
-    if result.status == "FAILED":
-        raise typer.Exit(1)
+    account = _account(instance)
+    try:
+        result = instance.preview_sync(account)
+    except HarborError as exc:
+        if exc.code == ErrorCode.ALREADY_RUNNING:
+            typer.echo("当前正在同步或认证，请等待结束后再查看计划。", err=True)
+        elif exc.code == ErrorCode.AUTH_REQUIRED:
+            typer.echo("需要先执行 icloudharbor setup。", err=True)
+        else:
+            typer.echo(f"无法生成计划：{exc}", err=True)
+        raise typer.Exit(1) from exc
+    _show_preview(result)
 
 
-@sync_app.command("run")
-def sync_run(
-    ctx: typer.Context,
-    account_id: Annotated[str | None, typer.Option("--account", "-a")] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
-    full_scan: Annotated[bool, typer.Option("--full-scan")] = False,
-) -> None:
+@app.command("sync")
+def sync(ctx: typer.Context) -> None:
+    """向容器后台提交一次同步任务。"""
+
     instance = _load_application(ctx)
-    account = _account(instance, account_id)
-    result = instance.run_sync(
-        account,
-        dry_run=dry_run,
-        force_full_scan=full_scan,
-    )
-    _show_plan(result)
-    if not dry_run:
-        typer.echo(
-            f"下载={result.downloaded_count} 删除本地={result.deleted_count} "
-            f"跳过={result.skipped_count} 失败={result.failed_count} "
-            f"下载数据={result.bytes_downloaded} 字节 释放空间={result.bytes_deleted} 字节"
-        )
-    if result.status in {"FAILED", "PARTIAL"}:
-        raise typer.Exit(1)
+    account = _account(instance)
+    submitted = _request_background_sync(instance, account)
+    typer.echo("同步任务已提交。" if submitted else "后台已有同步任务。")
+    typer.echo(f"查看日志：docker logs -f {_container_name()}")
 
 
-@sync_app.command("status")
-def sync_status(
-    ctx: typer.Context,
-    limit: Annotated[int, typer.Option("--limit", min=1, max=100)] = 10,
-) -> None:
+@app.command("backup")
+def backup(ctx: typer.Context) -> None:
+    """创建带时间戳的 SQLite 在线备份。"""
+
     instance = _load_application(ctx)
-    runs = instance.repository.list_runs(limit)
-    if not runs:
-        typer.echo("还没有同步记录。")
-        return
-    for run in runs:
-        typer.echo(
-            f"{run.started_at.isoformat()}\t{run.account_id}\t{run.status}\t"
-            f"下载={run.downloaded_count}\t失败={run.failed_count}\tID={run.id}"
-        )
-
-
-@database_app.command("check")
-def database_check(ctx: typer.Context) -> None:
-    instance = _load_application(ctx)
-    result = instance.database.check()
-    typer.echo(result)
-    if result.lower() != "ok":
-        raise typer.Exit(1)
-
-
-@database_app.command("backup")
-def database_backup(
-    ctx: typer.Context,
-    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
-) -> None:
-    instance = _load_application(ctx)
-    if output is None:
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        output = instance.config.runtime.database.with_name(f"icloudharbor-{stamp}.db.backup")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output = instance.config.runtime.database.with_name(f"icloudharbor-{stamp}.db.backup")
     typer.echo(str(instance.repository.backup(output)))
 
 
-@app.command("doctor")
-def doctor(ctx: typer.Context) -> None:
-    instance = _load_application(ctx)
-    health = instance.health.readiness()
-    typer.echo(f"应用状态：{health.status}")
-    for name, result in health.checks.items():
-        typer.echo(f"{name}: {result}")
-    for account in instance.config.accounts:
-        typer.echo(f"auth:{account.id}: {instance.repository.get_auth_status(account.id).value}")
-    if not health.ok:
-        raise typer.Exit(1)
+def _schedule_text(account: AccountConfig) -> str:
+    schedule = account.sync.schedule
+    if schedule is None:
+        text = "未安排"
+    elif isinstance(schedule, str):
+        text = f"Cron {schedule}" if len(schedule.split()) == 5 else f"每 {schedule}"
+    elif schedule.interval:
+        text = f"每 {schedule.interval}"
+    else:
+        text = f"Cron {schedule.cron}"
+    if account.sync.run_on_start:
+        text += "；启动时检查"
+    return text
 
 
 @app.command("status")
 def status(ctx: typer.Context) -> None:
+    """查看服务、认证、同步和调度状态。"""
+
     instance = _load_application(ctx)
+    account = _account(instance)
     health = instance.health.readiness()
-    typer.echo(f"状态：{health.status}")
-    runs = instance.repository.list_runs(1)
+    auth_status = instance.repository.get_auth_status(account.id).value
+    credentials = "已保存" if instance.credential_store(account).exists() else "未保存"
+    runs = [
+        run
+        for run in instance.repository.list_runs(20)
+        if not run.dry_run and run.status != "SKIPPED_ALREADY_RUNNING"
+    ]
+    pending = bool(instance.repository.pending_sync_requests(account.id))
+    typer.echo(f"iCloudHarbor {__version__}：{'正常' if health.ok else '异常'}")
+    typer.echo(
+        f"账号：{_display_apple_id(instance, account)}；认证={auth_status}；凭据={credentials}"
+    )
     if runs:
-        typer.echo(yaml.safe_dump(asdict(runs[0]), allow_unicode=True, sort_keys=False))
+        latest = runs[0]
+        typer.echo(
+            f"最近同步：{latest.started_at.isoformat()}；{latest.status}；"
+            f"下载={latest.downloaded_count}；失败={latest.failed_count}"
+        )
     else:
         typer.echo("最近同步：无")
+    typer.echo(f"计划：{_schedule_text(account)}")
+    typer.echo(f"后台任务：{'等待处理' if pending else '无'}")
+    if not health.ok:
+        for name, result in health.checks.items():
+            if result != "ok":
+                typer.echo(f"异常：{name}={result}")
+        raise typer.Exit(1)
 
 
-@app.command("healthcheck")
+@app.command("healthcheck", hidden=True)
 def healthcheck(
     ctx: typer.Context,
     liveness: Annotated[bool, typer.Option("--liveness")] = False,
@@ -716,7 +617,7 @@ def _startup_auth_notification(
     )
 
 
-@app.command("daemon")
+@app.command("daemon", hidden=True)
 def daemon(ctx: typer.Context) -> None:
     """Run the container's foreground scheduler without opening a network port."""
     instance = _load_application(ctx)
@@ -731,11 +632,12 @@ def daemon(ctx: typer.Context) -> None:
         LOGGER.info("安全模式：只从 iCloud 备份到本地，不会删除云端或本地文件")
     _log_auth_guidance(instance, account)
 
-    def scheduled(account_id: str) -> None:
-        _run_daemon_sync(instance, account_id)
+    def scheduled(account_id: str) -> SyncExecution:
+        result = _run_daemon_sync(instance, account_id)
         for job_id, run_at in scheduler.next_run_times():
             if job_id == f"sync:{account_id}":
                 LOGGER.info(f"下一次同步：{run_at:%Y-%m-%d %H:%M:%S %Z}")
+        return result
 
     scheduler = SchedulerService(instance.config, scheduled)
     auth_event = _startup_auth_notification(instance, account)

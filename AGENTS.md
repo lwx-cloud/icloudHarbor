@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.4.3`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.5.0`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -55,12 +55,15 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
 - `deploy/install.sh` 提供面向 Linux 和群晖 SSH 的 `curl | sudo bash` 安装向导：通过
-  `/dev/tty` 收集非敏感部署参数，创建挂载标记，拉取并启动生产镜像，运行 `doctor` 后再把
+  `/dev/tty` 收集非敏感部署参数，创建挂载标记，拉取并启动生产镜像，运行 `status` 后再把
   Apple 密码和验证码输入交给容器内的 `setup`。
-- `icloudharbor setup` 以星号遮罩读取密码、完成认证并保存本地续期凭据，然后把首次同步
-  持久化交给容器后台并退出；下载过程统一显示在主容器日志。
-- `icloudharbor session renew` 使用已保存凭据续期，Apple 要求时只询问验证码；成功后同样
-  请求后台立即同步。
+- `icloudharbor setup` 是唯一认证入口：首次以星号遮罩读取密码、完成认证并保存
+  本地续期凭据；凭据已存在时自动续期，Apple 要求时只询问验证码。成功后向容器后台
+  提交一次同步请求并退出，下载统一显示在主容器日志。
+- 公开 CLI 只保留 `setup`、`sync`、`plan`、`status`、`list`、`backup`、`reset` 七个单词命令；
+  `daemon`、`healthcheck`、`bootstrap` 是 Docker 内部隐藏入口。不得为已删除的旧命令恢复别名。
+- `sync` 只合并提交后台请求，不在 CLI 进程执行第二个同步；`plan` 是只读远端预览，不创建运行
+  记录、不认领本地文件、不通知、不下载或删除、不提交游标。
 - 普通 Docker 参数只接受 `6`、`12`、`24` 三种整数小时；高级 YAML 支持其他间隔、Cron、
   增量游标与定期全量扫描。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
@@ -75,14 +78,14 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 - 企业微信兼容 icloudpd 的四个媒体 ID。认证临期窗口可配置，默认提前 7 天，同一天只成功
   提醒一次。
-- 首次、手动和调度的正式同步都会路由结果事件，包括没有新文件的成功同步；`DRY_RUN` 和
+- 首次、手动请求和调度的正式同步都会路由结果事件，包括没有新文件的成功同步；只读计划和
   `SKIPPED_ALREADY_RUNNING` 不发送结果，实际发送还取决于通知开关和已启用渠道。
 - 通知没有独立定时器，认证临期只在同步时检查。启动通知按立即同步、延迟同步、后台请求或
   下一次计划显示真实状态；普通正文使用中文状态、易读数据量和明确原因，Webhook 的结构化
   payload 仍可携带 `error_code` 供自动化处理。本地清理通知的摘要只显示数量和释放空间，详情
   最多列出 50 个实际成功删除的文件名；Webhook 的 `data.deleted_files` 保留完整列表。
 - 首次未认证启动把“容器已启动”和“等待认证”合并为一条消息；同一认证问题使用 SQLite
-  跨进程持久去重，容器重启和后续调度不会重复提醒。`setup` 与 `session renew` 成功后发送
+  跨进程持久去重，容器重启和后续调度不会重复提醒。`setup` 首次认证或自动续期成功后发送
   `AUTH_RECOVERED`，明确后台同步请求已提交，并清除去重状态以允许未来新的认证问题再次提醒。
   认证通知关闭而普通启动通知开启时，首次合并消息回退为 `APP_STARTED`；两个开关都关闭时
   不发送。认证恢复、失效与临期仍由 `auth_required` 开关控制。
@@ -129,16 +132,21 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
 2. 调整 `/config` 内运行目录的属主与权限。
-3. 如果 `/config/config.yaml` 不存在，执行 `icloudharbor config bootstrap`。
+3. 如果 `/config/config.yaml` 不存在，执行隐藏内部入口 `icloudharbor bootstrap`。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
    最多运行一个认证或同步操作。
 
-`setup` 和 `session renew` 通常由 `docker compose exec` 启动为独立进程。`setup` 还会验证
-配置的图库和相册；`renew` 只使用已保存凭据重建认证。成功后两者都会增加 SQLite 同步请求
-代次并发送 `AUTH_RECOVERED`；daemon 观察到新代次后重建协议对象并执行正式同步。因此交互
-命令退出不代表下载结束，下载进度属于 daemon 日志。认证问题通知的去重状态也保存在 SQLite，
-认证恢复后必须重新放行，不能只做进程内去重。
+`setup` 通常由 `docker compose exec` 启动为独立进程。没有本地凭据时它读取密码并验证配置的
+图库和相册；凭据已存在时它自动续期且不重复询问密码。成功后增加 SQLite 同步请求代次并发送
+`AUTH_RECOVERED`；daemon 观察到新代次后重建协议对象并执行正式同步。`sync` 使用同一请求机制，如果已有
+待处理请求则不重复增加代次。因此这些命令退出不代表下载结束，下载进度属于 daemon 日志。认证问题
+通知的去重状态也保存在 SQLite，认证恢复后必须重新放行，不能只做进程内去重。
+
+`plan` 走与正式同步相同的预检、认证、图库扫描和规划逻辑，但不调用 `create_run()`、
+`upsert_library()`、`record_download()`、下载器、本地删除器、通知器或游标提交。为了避免与 daemon 并发读写，
+仍必须取得账号与同步锁。如果前台命令暂时占用锁，daemon 将请求保留并在 30 秒后合并重试，不会
+每秒生成 `SKIPPED_ALREADY_RUNNING` 运行记录。
 
 一次同步依次经过：
 
@@ -178,7 +186,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 
 ### `src/icloudharbor`
 
-- `cli.py`：全部公开命令、交互认证和守护进程入口。
+- `cli.py`：七个单词公开命令、交互认证，以及 Docker 使用的三个隐藏入口。
 - `application.py`：依赖装配中心，创建数据库、协议适配器、锁、健康检查和通知器。
 - `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束；挂载标记名与
   下载块大小是固定常量，不是公开配置项。
@@ -194,8 +202,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `protocol/models.py`：与具体协议库无关的认证、图库、Asset 和 Resource 模型。
 - `protocol/exceptions.py`：稳定的业务错误码。
 - `protocol/pyicloud_adapter.py`：`pyicloud` 兼容边界、2FA、资源标准化和流式下载。
-- `photos/engine.py`：固定阶段的同步编排和安全检查。
-- `photos/planner.py`：幂等计划、本地完整性判断和修复决策。
+- `photos/engine.py`：固定阶段的正式同步编排、只读计划编排和安全检查。
+- `photos/planner.py`：幂等计划、本地完整性判断和修复决策；只读模式不持久化磁盘认领。
 - `photos/policies.py`：媒体、RAW、版本、收藏、隐藏和日期策略。
 - `photos/naming.py`：安全路径渲染、跨平台字符清理和冲突处理。
 - `download/manager.py`：并发下载、断点续传、重试和原子落盘。
@@ -207,7 +215,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `database/models.py`：SQLite 数据结构，包括跨进程同步请求代次和转换 JPEG 等派生文件记录。
 - `database/repository.py`：账号、图库、资源、运行记录、游标、锁和同步请求的数据访问。
 - `database/session.py`：SQLite 连接、WAL、外键、建表和完整性检查；当前没有独立迁移框架。
-- `scheduler/service.py`：Cron/间隔、启动时任务和进程内合并的立即任务。
+- `scheduler/service.py`：Cron/间隔、启动时任务和进程内合并的立即任务；锁冲突后延迟合并重试。
 - `scheduler/locks.py`：进程锁、文件锁和数据库租约三层互斥，以及崩溃残留租约恢复。
 - `notify/base.py`：通知事件路由和五种通知通道。
 - `observability/logging.py`：文本/JSON 结构化日志、第三方日志降噪和标准日志脱敏。
@@ -260,7 +268,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
   `/config`；Compose 项目名保存在安装器管理标记中，重跑时不得重新推断或任意改变。
 - 安装器只可调整自己新建的专用目录，不得递归 `chown` 已有照片库或擅自修改 NAS ACL。
 - 检测到已有 `.env` 时，安装器不得覆盖账号、路径、通知密钥或任何持久化内容；只能更新
-  Compose 文件、拉取镜像、重建容器并重新执行 `doctor`。
+  Compose 文件、拉取镜像、重建容器并重新执行 `status`。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
 - Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`
@@ -372,7 +380,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   修复同一 Asset 多资源并发完成时的唯一键竞态；未显式设置 `IH_ACCOUNT_NAME` 时，账号显示
   名称跟随 `IH_APPLE_ID`。
 - 2026-07-31 的 0.3.7 认证通知改进：首次未认证启动合并启动与等待认证消息，使用 SQLite
-  持久去重同一认证问题；`setup` 和 `session renew` 成功后发送认证恢复消息并提交后台同步
+  持久去重同一认证问题；当时的首次与续期入口成功后发送认证恢复消息并提交后台同步
   请求，认证成功后重新允许未来的新认证问题触发提醒。
 - 2026-08-01 的 0.3.8 认领策略放宽：Tier 2 文件认领不再要求远端 size 匹配或非空，
   磁盘上已有文件即哈希入库、跳过下载；消除数据库丢失后因 size 不匹配导致的 _AssetID
@@ -385,7 +393,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   兜底错误消息包含原始异常详情；默认并发下载数从 2 降为 1（串行），降低 Apple 限流概率。
 - 2026-08-03 的 0.3.11 本地删除同步：新增默认关闭的 `IH_AUTO_DELETE`，读取个人图库“最近删除”
   并按账号、图库和 Asset ID 精确匹配已记录文件；删除前复核受管路径、归属、普通文件类型、
-  大小与 SHA-256，拒绝同名猜测、符号链接、人工修改和多 Asset 路径冲突；`sync plan` 可安全预览，
+  大小与 SHA-256，拒绝同名猜测、符号链接、人工修改和多 Asset 路径冲突；当前使用 `plan` 安全预览，
   照片恢复到普通图库后会重新下载，始终不调用 iCloud 远端删除接口。
 - 2026-08-03 的 0.4.0 发布：把最近删除本地同步作为 0.4 系列正式版本发布，统一源码、示例配置、
   README 和锁文件版本；`v0.4.0` 标签触发 amd64/arm64 镜像构建并更新 Docker Hub 的完整版本号
@@ -403,6 +411,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   `6`、`12`、`24` 三种小时数字；检测到当前版本不支持的旧环境变量时统一列出变量名并失败，
   不再输出过期迁移说明；配置错误同时显示程序版本并脱敏 Apple Account 邮箱，入口脚本分别
   指明无效的 `IH_PUID` 或 `IH_PGID`。
+- 2026-08-03 的 0.5.0 命令面精简：删除多层与重复公开命令，收口为七个单词命令；`setup` 自动区分
+  首次认证与续期，`sync` 只提交后台任务，`plan` 不再写同步历史或认领记录；完成操作后不再重复
+  打印“待处理”计划，最近删除未匹配项改为单条汇总，锁冲突重试不再刷新虚假运行记录。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -432,7 +443,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.4.3`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.5.0`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。
@@ -492,9 +503,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - iCloudHarbor 的前台进程始终是独立调度器；没有凭据或 Session 时，容器日志会明确提示
   `docker exec -it icloudharbor icloudharbor setup`。交互进程通过 SQLite 请求代次与后台
   交接，不依赖主容器标准输入或强制重启。
-- iCloudHarbor 的 `setup` 与 icloudpd 重复执行 `--Initialise` 不同：每次都先清除旧 Session、
-  重新询问密码、覆盖本地 AES-256-GCM 凭据、完成 MFA、检查图库/相册，然后写入持久化请求
-  并退出。主 daemon 刷新协议对象后立即执行正式同步，因此全部下载日志进入 `docker logs`。
-- iCloudHarbor 的 `session renew` 对应 `reauth.sh`：清除旧 Session，复用保存的本地凭据，
-  Apple 要求时只询问验证码，成功后请求后台立即同步并退出。若本地凭据不存在，则要求改用
-  `setup`。
+- iCloudHarbor 的 `setup` 同时覆盖 icloudpd 的首次 `--Initialise` 和 `reauth.sh`：无本地凭据时重新询问
+  密码、保存 AES-256-GCM 凭据、完成 MFA 并检查图库/相册；已有凭据时清除旧 Session，复用保存的密码，
+  Apple 要求时只询问验证码。成功后写入持久化后台请求并退出，主 daemon 刷新协议对象后执行正式
+  同步，因此全部下载日志进入 `docker logs`。需要强制重新输入密码时，先运行 `reset` 再运行 `setup`。
