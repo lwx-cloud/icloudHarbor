@@ -57,8 +57,16 @@ def _parse_csv_lower(value: str) -> list[str]:
 
 def _parse_sync_interval(value: str) -> str:
     normalized = value.strip()
+    if normalized in {"6h", "12h", "24h"}:
+        hours = normalized.removesuffix("h")
+        raise ValueError(
+            f"IH_SYNC_INTERVAL 只填写小时数字；请将 IH_SYNC_INTERVAL={normalized} "
+            f"改为 IH_SYNC_INTERVAL={hours}"
+        )
     if normalized not in {"6", "12", "24"}:
-        raise ValueError("IH_SYNC_INTERVAL 只能填写 6、12 或 24，单位固定为小时")
+        raise ValueError(
+            "IH_SYNC_INTERVAL 只能填写 6、12 或 24（例如 IH_SYNC_INTERVAL=6，不要填写 6h）"
+        )
     return f"{normalized}h"
 
 
@@ -123,6 +131,24 @@ NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
 
 WECOM_SECRET_FILE = "/config/notification-keys/wecom-secret"
 
+UNSUPPORTED_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "IH_SCHEDULE",
+        "IH_DESTINATION",
+        "IH_PHOTO_VERSION",
+        "IH_NOTIFY_NO_CHANGES",
+        "IH_VERIFY_HASH",
+        "IH_KEEP_PARTIAL",
+        "IH_CHUNK_SIZE",
+        "IH_MOUNTED_MARKER",
+        "IH_DOWNLOAD_PHOTOS",
+        "IH_KEEP_UNICODE",
+        "IH_UMASK",
+        "MEDIA_ID_DELETE",
+        "notification_days",
+    }
+)
+
 
 def config_path_from_env(explicit: Path | None = None) -> Path:
     return explicit or Path(os.environ.get("IH_CONFIG_FILE", DEFAULT_CONFIG_PATH))
@@ -147,9 +173,11 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
     if resolved.is_file():
         return load_config(resolved), False
 
+    _reject_unsupported_environment_variables()
+
     apple_id = _environment_value("IH_APPLE_ID")
     if apple_id is None:
-        raise ValueError("首次启动需要设置 IH_APPLE_ID；程序会据此自动生成 /config/config.yaml")
+        raise ValueError(f"首次启动需要设置 IH_APPLE_ID；程序会据此自动生成 {resolved}")
     apple_id = apple_id.strip()
 
     data: dict[str, Any] = {
@@ -190,6 +218,8 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
 
 def apply_environment_overrides(data: dict[str, Any]) -> None:
     """Apply non-secret Docker overrides on top of the YAML configuration."""
+
+    _reject_unsupported_environment_variables()
 
     runtime = _mapping(data, "runtime")
     _apply_mapping(runtime, RUNTIME_ENV_OVERRIDES)
@@ -257,7 +287,9 @@ def _apply_wecom_environment(notifications: dict[str, Any]) -> None:
         "enabled": True,
         "corp_id": values["corp_id"],
         "corp_secret_file": WECOM_SECRET_FILE,
-        "agent_id": _parse_int(values["agent_id"] or ""),
+        "agent_id": _parse_environment_value(
+            "IH_WECOM_AGENT_ID", values["agent_id"] or "", _parse_int
+        ),
         "to_user": values["to_user"],
     }
     for key in (
@@ -288,6 +320,28 @@ def _environment_value(name: str) -> str | None:
     return value
 
 
+def _reject_unsupported_environment_variables() -> None:
+    unsupported = sorted(
+        name for name in UNSUPPORTED_ENVIRONMENT_VARIABLES if _environment_value(name) is not None
+    )
+    if unsupported:
+        names = "、".join(unsupported)
+        raise ValueError(
+            f"检测到当前版本不支持的环境变量：{names}。"
+            "请删除这些变量，并按照当前 README.md 或 CONFIGURATION.md 重新配置"
+        )
+
+
+def _parse_environment_value(name: str, value: str, parser: Parser) -> object:
+    try:
+        return parser(value)
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith(name):
+            raise
+        raise ValueError(f"{name} 配置无效：{message}") from exc
+
+
 def _apply_mapping(
     target: dict[str, Any],
     overrides: tuple[tuple[str, tuple[str, ...], Parser], ...],
@@ -296,7 +350,7 @@ def _apply_mapping(
         raw = _environment_value(name)
         if raw is None:
             continue
-        _set_nested(target, path, parser(raw))
+        _set_nested(target, path, _parse_environment_value(name, raw, parser))
 
 
 def _set_nested(target: dict[str, Any], path: tuple[str, ...], value: object) -> None:

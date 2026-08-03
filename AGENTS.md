@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.4.2`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.4.3`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -399,6 +399,10 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-03 的 0.4.2 清理通知详情：本地删除报告把成功 `unlink` 的文件名传到同步结果；通知
   摘要保持简洁，展开正文最多列出 50 个文件名并说明省略数量，Webhook 结构化数据保留完整
   列表。删除失败、仅计划候选和已经不存在的文件不会出现在已清理明细中。
+- 2026-08-03 的 0.4.3 配置错误提示改进：Docker 参数 `IH_SYNC_INTERVAL` 明确只接受
+  `6`、`12`、`24` 三种小时数字；检测到当前版本不支持的旧环境变量时统一列出变量名并失败，
+  不再输出过期迁移说明；配置错误同时显示程序版本并脱敏 Apple Account 邮箱，入口脚本分别
+  指明无效的 `IH_PUID` 或 `IH_PGID`。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -428,7 +432,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.4.2`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.4.3`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

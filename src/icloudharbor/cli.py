@@ -106,8 +106,12 @@ def _load_application(ctx: typer.Context) -> HarborApplication:
         configure_logging(instance.config.runtime)
         return instance
     except (FileNotFoundError, ValueError, ValidationError, OSError) as exc:
-        typer.echo(f"配置或初始化失败：{exc}", err=True)
+        _echo_configuration_error("配置或初始化失败", exc)
         raise typer.Exit(2) from exc
+
+
+def _echo_configuration_error(prefix: str, exc: Exception) -> None:
+    typer.echo(f"iCloudHarbor {__version__} {prefix}：{redact(exc)}", err=True)
 
 
 def _account(instance: HarborApplication, account_id: str | None) -> AccountConfig:
@@ -156,7 +160,7 @@ def config_validate(ctx: typer.Context) -> None:
     try:
         config = load_config(ctx.obj)
     except Exception as exc:
-        typer.echo(f"配置无效：{exc}", err=True)
+        _echo_configuration_error("配置无效", exc)
         raise typer.Exit(2) from exc
     typer.echo(f"配置有效：version={config.version}，账号数={len(config.accounts)}")
 
@@ -168,7 +172,7 @@ def config_bootstrap(ctx: typer.Context) -> None:
     try:
         config, created = bootstrap_config(ctx.obj)
     except Exception as exc:
-        typer.echo(f"无法自动生成配置：{exc}", err=True)
+        _echo_configuration_error("无法自动生成配置", exc)
         raise typer.Exit(2) from exc
     if created:
         typer.echo(f"已自动生成配置：{ctx.obj}（账号数={len(config.accounts)}）")

@@ -4,13 +4,20 @@ set -eu
 IH_RUNTIME_UID="${IH_PUID:-1000}"
 IH_RUNTIME_GID="${IH_PGID:-1000}"
 
-case "$IH_RUNTIME_UID:$IH_RUNTIME_GID" in
-  *[!0-9:]*|:*|*:) echo "IH_PUID 和 IH_PGID 必须是正整数" >&2; exit 2 ;;
-esac
-if [ "$IH_RUNTIME_UID" -lt 1 ] || [ "$IH_RUNTIME_GID" -lt 1 ]; then
-  echo "IH_PUID 和 IH_PGID 必须是正整数" >&2
-  exit 2
-fi
+validate_positive_id() {
+  variable_name="$1"
+  variable_value="$2"
+  case "$variable_value" in
+    *[!0-9]*|"") echo "$variable_name 必须是大于 0 的整数" >&2; exit 2 ;;
+  esac
+  if [ "$variable_value" -lt 1 ]; then
+    echo "$variable_name 必须是大于 0 的整数" >&2
+    exit 2
+  fi
+}
+
+validate_positive_id IH_PUID "$IH_RUNTIME_UID"
+validate_positive_id IH_PGID "$IH_RUNTIME_GID"
 umask 0022
 
 groupmod --non-unique --gid "$IH_RUNTIME_GID" icloudharbor
