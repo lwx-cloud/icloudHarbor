@@ -13,8 +13,6 @@ INSTALLER_REF="${IH_INSTALLER_REF:-main}"
 RAW_BASE_URL="${IH_INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/${REPOSITORY}/${INSTALLER_REF}}"
 SERVICE_NAME="icloudharbor"
 IMAGE_NAME="lwxcloud/icloudharbor:latest"
-ASSUME_YES="${IH_INSTALLER_ASSUME_YES:-false}"
-ASSUME_YES="${ASSUME_YES,,}"
 
 if [[ -t 1 ]]; then
     COLOR_BLUE=$'\033[0;34m'
@@ -36,6 +34,9 @@ STAGED_ENV=""
 STAGED_EXAMPLE=""
 STAGED_MARKER=""
 PROJECT_NAME=""
+RECOVERED_ENV_NAMES=()
+RECOVERED_ENV_VALUES=()
+CONTAINER_ENVIRONMENT=()
 
 cleanup() {
     [[ -z "$STAGED_COMPOSE" ]] || rm -f -- "$STAGED_COMPOSE"
@@ -69,10 +70,9 @@ iCloudHarbor Docker 一键安装器
 
 用法：
   curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
-  sudo bash install.sh [--yes]
+  sudo bash install.sh
 
 选项：
-  -y, --yes  接受确认提示；首次认证仍必须在终端输入密码和验证码
   -h, --help 显示帮助
 
 可选环境变量：
@@ -94,9 +94,6 @@ EOF
 
 for argument in "$@"; do
     case "$argument" in
-        -y | --yes)
-            ASSUME_YES="true"
-            ;;
         -h | --help)
             usage
             exit 0
@@ -127,31 +124,6 @@ prompt_value() {
     fi
     IFS= read -r entered < /dev/tty || true
     PROMPT_RESULT="${entered:-$default_value}"
-}
-
-confirm() {
-    local message="$1"
-    local default_answer="${2:-yes}"
-    local answer=""
-
-    if [[ "$ASSUME_YES" == "true" ]]; then
-        return 0
-    fi
-    if ! has_tty; then
-        return 1
-    fi
-    if [[ "$default_answer" == "yes" ]]; then
-        printf '%s [Y/n]: ' "$message" > /dev/tty
-    else
-        printf '%s [y/N]: ' "$message" > /dev/tty
-    fi
-    IFS= read -r answer < /dev/tty || true
-    answer="${answer,,}"
-    if [[ -z "$answer" ]]; then
-        [[ "$default_answer" == "yes" ]]
-        return
-    fi
-    [[ "$answer" == "y" || "$answer" == "yes" ]]
 }
 
 validate_positive_id() {
@@ -325,13 +297,31 @@ install_managed_files() {
     STAGED_EXAMPLE=""
 }
 
-write_new_environment() {
+write_installer_marker() {
     STAGED_MARKER=$(mktemp "$INSTALL_DIR/.icloudharbor-installer.XXXXXX")
     printf 'project=%s\n' "$PROJECT_NAME" > "$STAGED_MARKER"
     chown 0:0 "$STAGED_MARKER"
     chmod 0644 "$STAGED_MARKER"
     mv -f -- "$STAGED_MARKER" "$INSTALL_DIR/.icloudharbor-installer"
     STAGED_MARKER=""
+}
+
+write_dotenv_assignment() {
+    local name="$1"
+    local value="$2"
+    local escaped
+
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || \
+        die "已有容器的 $name 包含换行，无法安全写入 .env。"
+    escaped="$value"
+    escaped="${escaped//\'/\\\'}"
+    printf "%s='%s'\n" "$name" "$escaped"
+}
+
+write_new_environment() {
+    local index
+
+    write_installer_marker
 
     STAGED_ENV=$(mktemp "$INSTALL_DIR/.env.XXXXXX")
     chmod 0600 "$STAGED_ENV"
@@ -346,12 +336,13 @@ IH_PGID="$PGID"
 IH_TIMEZONE="$TIMEZONE"
 IH_REGION="$REGION"
 IH_SYNC_INTERVAL="$SYNC_INTERVAL"
-IH_RUN_ON_START="true"
-IH_DOWNLOAD_VIDEOS="true"
-IH_DOWNLOAD_LIVE_PHOTOS="true"
-IH_CONVERT_HEIC_TO_JPEG="false"
 IH_SYNOLOGY_PHOTOS_APP_FIX="$SYNOLOGY_FIX"
 EOF
+    for ((index = 0; index < ${#RECOVERED_ENV_NAMES[@]}; index++)); do
+        write_dotenv_assignment \
+            "${RECOVERED_ENV_NAMES[index]}" \
+            "${RECOVERED_ENV_VALUES[index]}" >> "$STAGED_ENV"
+    done
     chown 0:0 "$STAGED_ENV"
     mv -f -- "$STAGED_ENV" "$INSTALL_DIR/.env"
     STAGED_ENV=""
@@ -495,23 +486,24 @@ collect_fresh_configuration() {
     fi
     detect_timezone
 
-    prompt_validated \
-        "Apple Account 邮箱" "${IH_APPLE_ID:-}" validate_apple_id \
-        "Apple Account 必须只有一个非首尾 @、没有路径保留字符，且不超过 220 字节。"
-    APPLE_ID="$PROMPT_RESULT"
+    APPLE_ID="${IH_APPLE_ID:-}"
+    if [[ -z "$APPLE_ID" ]]; then
+        prompt_validated \
+            "Apple Account 邮箱" "" validate_apple_id \
+            "Apple Account 必须只有一个非首尾 @、没有路径保留字符，且不超过 220 字节。"
+        APPLE_ID="$PROMPT_RESULT"
+    fi
+    validate_apple_id "$APPLE_ID" || \
+        die "IH_APPLE_ID 不是有效的 Apple Account 邮箱。"
 
     CONFIG_PATH="${IH_CONFIG_PATH:-$INSTALL_DIR/data/config}"
-    prompt_validated \
-        "配置、数据库和 Session 目录" "$CONFIG_PATH" validate_path \
-        "配置目录必须是安全的绝对 Linux 路径，不能使用系统顶层目录。"
-    normalize_path "$PROMPT_RESULT"
+    validate_path "$CONFIG_PATH" || die "IH_CONFIG_PATH 不是安全的绝对 Linux 路径。"
+    normalize_path "$CONFIG_PATH"
     CONFIG_PATH="$NORMALIZED_PATH"
 
     PHOTOS_PATH="${IH_PHOTOS_PATH:-$(default_photos_directory)}"
-    prompt_validated \
-        "照片保存目录（不会追加账号子目录）" "$PHOTOS_PATH" validate_path \
-        "照片目录必须是安全的绝对 Linux 路径，不能使用系统顶层目录。"
-    normalize_path "$PROMPT_RESULT"
+    validate_path "$PHOTOS_PATH" || die "IH_PHOTOS_PATH 不是安全的绝对 Linux 路径。"
+    normalize_path "$PHOTOS_PATH"
     PHOTOS_PATH="$NORMALIZED_PATH"
 
     if [[ "$CONFIG_PATH" == "$PHOTOS_PATH" ]]; then
@@ -531,31 +523,24 @@ collect_fresh_configuration() {
         "$CONFIG_PATH/"*) die "照片目录不能位于配置目录内部。" ;;
     esac
 
-    prompt_validated "容器运行 UID" "${IH_PUID:-$default_uid}" validate_positive_id \
-        "UID 必须是非零正整数。"
-    PUID="$PROMPT_RESULT"
-    prompt_validated "容器运行 GID" "${IH_PGID:-$default_gid}" validate_positive_id \
-        "GID 必须是非零正整数。"
-    PGID="$PROMPT_RESULT"
+    PUID="${IH_PUID:-$default_uid}"
+    PGID="${IH_PGID:-$default_gid}"
+    validate_positive_id "$PUID" || die "IH_PUID 必须是非零正整数。"
+    validate_positive_id "$PGID" || die "IH_PGID 必须是非零正整数。"
 
     TIMEZONE="${IH_TIMEZONE:-$DETECTED_TIMEZONE}"
-    prompt_validated "时区" "$TIMEZONE" validate_timezone \
-        "时区只能包含字母、数字、点、斜杠、加号、减号和下划线。"
-    TIMEZONE="$PROMPT_RESULT"
+    validate_timezone "$TIMEZONE" || die "IH_TIMEZONE 格式无效。"
 
-    prompt_validated "iCloud 区域（auto/global/china）" "${IH_REGION:-auto}" validate_region \
-        "区域只能是 auto、global 或 china。"
-    REGION="$PROMPT_RESULT"
+    REGION="${IH_REGION:-auto}"
+    validate_region "$REGION" || die "IH_REGION 只能是 auto、global 或 china。"
 
-    prompt_validated "同步间隔小时（6/12/24）" "${IH_SYNC_INTERVAL:-24}" validate_interval \
-        "同步间隔只能是 6、12 或 24。"
-    SYNC_INTERVAL="$PROMPT_RESULT"
+    SYNC_INTERVAL="${IH_SYNC_INTERVAL:-24}"
+    validate_interval "$SYNC_INTERVAL" || die "IH_SYNC_INTERVAL 只能是 6、12 或 24。"
 
-    prompt_validated \
-        "启用 Synology Photos 兼容处理（true/false）" \
-        "${IH_SYNOLOGY_PHOTOS_APP_FIX:-$default_synology_fix}" validate_boolean \
-        "该选项只能是 true 或 false。"
-    SYNOLOGY_FIX="${PROMPT_RESULT,,}"
+    SYNOLOGY_FIX="${IH_SYNOLOGY_PHOTOS_APP_FIX:-$default_synology_fix}"
+    SYNOLOGY_FIX="${SYNOLOGY_FIX,,}"
+    validate_boolean "$SYNOLOGY_FIX" || \
+        die "IH_SYNOLOGY_PHOTOS_APP_FIX 只能是 true 或 false。"
 
     CONTAINER_NAME="${IH_CONTAINER_NAME:-icloudharbor}"
     validate_container_name "$CONTAINER_NAME" || die "IH_CONTAINER_NAME 不是有效的 Docker 容器名。"
@@ -597,9 +582,156 @@ load_managed_project() {
     PROJECT_NAME="${BASH_REMATCH[1]}"
 }
 
+is_recognized_install_directory() {
+    local candidate
+
+    for candidate in \
+        "$INSTALL_DIR/docker-compose.yml" \
+        "$INSTALL_DIR/compose.yml" \
+        "$INSTALL_DIR/compose.yaml"; do
+        if [[ -f "$candidate" && ! -L "$candidate" ]] && \
+            grep -Fq 'lwxcloud/icloudharbor' "$candidate"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+load_container_environment() {
+    local container_name="$1"
+    local line
+
+    CONTAINER_ENVIRONMENT=()
+    while IFS= read -r line; do
+        CONTAINER_ENVIRONMENT+=("$line")
+    done < <(docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_name")
+}
+
+container_environment_value() {
+    local key="$2"
+    local line
+
+    CONTAINER_ENV_VALUE=""
+    for line in "${CONTAINER_ENVIRONMENT[@]}"; do
+        case "$line" in
+            "$key="*)
+                CONTAINER_ENV_VALUE="${line#*=}"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+recover_optional_container_environment() {
+    local container_name="$1"
+    local name
+    local value
+    local supported_names=(
+        IH_ACCOUNT_ID IH_ACCOUNT_NAME IH_LIBRARIES
+        IH_MINIMUM_FREE_SPACE IH_DIRECTORY_PERMISSIONS IH_FILE_PERMISSIONS
+        IH_DOWNLOAD_VIDEOS IH_DOWNLOAD_LIVE_PHOTOS IH_PHOTO_SIZE IH_LIVE_PHOTO_SIZE
+        IH_RAW_MODE IH_CONVERT_HEIC_TO_JPEG IH_JPEG_PATH IH_JPEG_QUALITY
+        IH_ALBUMS IH_EXCLUDE_ALBUMS IH_CREATED_AFTER IH_CREATED_BEFORE
+        IH_FAVORITES_ONLY IH_INCLUDE_HIDDEN IH_RECENT_ONLY IH_UNTIL_FOUND
+        IH_FOLDER_STRUCTURE IH_FILENAME_TEMPLATE IH_CONFLICT_POLICY
+        IH_SYNC_STRATEGY IH_FULL_SCAN_INTERVAL IH_RUN_ON_START IH_DOWNLOAD_DELAY
+        IH_AUTO_DELETE IH_DOWNLOAD_CONCURRENCY IH_DOWNLOAD_TIMEOUT IH_MAX_RETRIES
+        IH_LOG_LEVEL IH_LOG_FORMAT IH_NOTIFICATION_TITLE IH_SILENT_NOTIFICATIONS
+        IH_NOTIFY_STARTUP IH_NOTIFY_SUCCESS IH_NOTIFY_FAILURE IH_NOTIFY_AUTH_REQUIRED
+        IH_NOTIFICATION_DAYS IH_WECOM_ID IH_WECOM_SECRET IH_WECOM_AGENT_ID
+        IH_WECOM_TO_USER IH_WECOM_PROXY IH_WECOM_CONTENT_SOURCE_URL IH_WECOM_NAME
+        MEDIA_ID_DOWNLOAD MEDIA_ID_STARTUP MEDIA_ID_WARNING MEDIA_ID_EXPIRATION
+    )
+
+    RECOVERED_ENV_NAMES=()
+    RECOVERED_ENV_VALUES=()
+    for name in "${supported_names[@]}"; do
+        if container_environment_value "$container_name" "$name"; then
+            value="$CONTAINER_ENV_VALUE"
+            [[ -n "$value" ]] || continue
+            RECOVERED_ENV_NAMES+=("$name")
+            RECOVERED_ENV_VALUES+=("$value")
+        fi
+    done
+}
+
+adopt_existing_container() {
+    local requested_name="${IH_CONTAINER_NAME:-icloudharbor}"
+    local image
+    local project_label
+
+    docker container inspect "$requested_name" > /dev/null 2>&1 || return 1
+    image=$(docker container inspect --format '{{.Config.Image}}' "$requested_name")
+    case "$image" in
+        lwxcloud/icloudharbor:* | lwxcloud/icloudharbor@*) ;;
+        *) return 1 ;;
+    esac
+
+    CONTAINER_NAME="$requested_name"
+    load_container_environment "$requested_name"
+    container_environment_value "$requested_name" IH_APPLE_ID || true
+    APPLE_ID="$CONTAINER_ENV_VALUE"
+    validate_apple_id "$APPLE_ID" || \
+        die "已有容器缺少有效的 IH_APPLE_ID，无法自动接管。"
+
+    CONFIG_PATH=$(docker container inspect --format \
+        '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}' \
+        "$requested_name")
+    PHOTOS_PATH=$(docker container inspect --format \
+        '{{range .Mounts}}{{if eq .Destination "/photos"}}{{.Source}}{{end}}{{end}}' \
+        "$requested_name")
+    validate_path "$CONFIG_PATH" || die "已有容器的 /config 挂载路径不安全。"
+    validate_path "$PHOTOS_PATH" || die "已有容器的 /photos 挂载路径不安全。"
+    normalize_path "$CONFIG_PATH"
+    CONFIG_PATH="$NORMALIZED_PATH"
+    normalize_path "$PHOTOS_PATH"
+    PHOTOS_PATH="$NORMALIZED_PATH"
+
+    container_environment_value "$requested_name" IH_PUID || true
+    PUID="${CONTAINER_ENV_VALUE:-1000}"
+    container_environment_value "$requested_name" IH_PGID || true
+    PGID="${CONTAINER_ENV_VALUE:-1000}"
+    validate_positive_id "$PUID" || die "已有容器的 IH_PUID 无效。"
+    validate_positive_id "$PGID" || die "已有容器的 IH_PGID 无效。"
+
+    container_environment_value "$requested_name" IH_TIMEZONE || true
+    TIMEZONE="$CONTAINER_ENV_VALUE"
+    if [[ -z "$TIMEZONE" ]]; then
+        container_environment_value "$requested_name" TZ || true
+        TIMEZONE="${CONTAINER_ENV_VALUE:-Asia/Shanghai}"
+    fi
+    validate_timezone "$TIMEZONE" || die "已有容器的时区无效。"
+
+    container_environment_value "$requested_name" IH_REGION || true
+    REGION="$CONTAINER_ENV_VALUE"
+    container_environment_value "$requested_name" IH_SYNC_INTERVAL || true
+    SYNC_INTERVAL="$CONTAINER_ENV_VALUE"
+    container_environment_value "$requested_name" IH_SYNOLOGY_PHOTOS_APP_FIX || true
+    SYNOLOGY_FIX="$CONTAINER_ENV_VALUE"
+    SYNOLOGY_FIX="${SYNOLOGY_FIX,,}"
+    [[ -z "$REGION" ]] || validate_region "$REGION" || \
+        die "已有容器的 IH_REGION 无效。"
+    [[ -z "$SYNC_INTERVAL" ]] || validate_interval "$SYNC_INTERVAL" || \
+        die "已有容器的 IH_SYNC_INTERVAL 无效。"
+    [[ -z "$SYNOLOGY_FIX" ]] || validate_boolean "$SYNOLOGY_FIX" || \
+        die "已有容器的 IH_SYNOLOGY_PHOTOS_APP_FIX 无效。"
+
+    project_label=$(docker container inspect --format \
+        '{{index .Config.Labels "com.docker.compose.project"}}' "$requested_name")
+    if [[ "$project_label" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        PROJECT_NAME="$project_label"
+    else
+        set_project_name "$CONTAINER_NAME"
+    fi
+    recover_optional_container_environment "$requested_name"
+    return 0
+}
+
 main() {
     local install_default
     local existing_install="false"
+    local interrupted_install="false"
     local env_path
     local marker_path
 
@@ -609,56 +741,75 @@ main() {
 
     check_prerequisites
     install_default="${IH_INSTALL_DIR:-$(default_install_directory)}"
-    prompt_validated "安装目录" "$install_default" validate_path \
-        "安装目录必须是安全的绝对 Linux 路径，不能使用系统顶层目录。"
-    normalize_path "$PROMPT_RESULT"
+    validate_path "$install_default" || \
+        die "IH_INSTALL_DIR 不是安全的绝对 Linux 路径。"
+    normalize_path "$install_default"
     INSTALL_DIR="$NORMALIZED_PATH"
     [[ ! -L "$INSTALL_DIR" ]] || die "安装目录不能是符号链接：$INSTALL_DIR"
+    info "安装目录：$INSTALL_DIR"
     env_path="$INSTALL_DIR/.env"
     marker_path="$INSTALL_DIR/.icloudharbor-installer"
 
     if [[ -e "$env_path" || -L "$env_path" ]]; then
         [[ -f "$env_path" && ! -L "$env_path" ]] || \
             die "安装器管理的 .env 必须是普通文件：$env_path"
-        load_managed_project || \
-            die "目录包含非安装器管理的 .env；为避免覆盖手动部署或其他项目，已停止：$INSTALL_DIR"
+        if ! load_managed_project; then
+            is_recognized_install_directory || \
+                die "目录中的 .env 不属于可识别的 iCloudHarbor 部署：$INSTALL_DIR"
+            if ! adopt_existing_container; then
+                set_project_name "${IH_CONTAINER_NAME:-icloudharbor}"
+            fi
+            write_installer_marker
+            info "已接管手动创建的 iCloudHarbor 部署，原 .env 保持不变。"
+        fi
         chown 0:0 "$INSTALL_DIR" "$env_path" "$marker_path"
         chmod 0755 "$INSTALL_DIR"
         chmod 0600 "$env_path"
         chmod 0644 "$marker_path"
         existing_install="true"
         info "检测到已有安装，将保留 .env、配置、数据库、Session 和照片。"
-        confirm "更新 Compose 文件并拉取最新镜像？" "yes" || die "已取消更新。"
     else
-        if [[ -e "$marker_path" || -L "$marker_path" ]]; then
-            load_managed_project || die "安装器管理标记无效：$marker_path"
-            info "检测到上次中断的安装，将重新收集参数并继续。"
-        elif [[ -d "$INSTALL_DIR" ]] && \
-            [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-            die "安装目录非空且没有 .env，为避免覆盖未知文件已停止：$INSTALL_DIR"
-        fi
-        if ! has_tty && [[ -z "${IH_APPLE_ID:-}" ]]; then
-            die "无交互终端时必须通过 IH_APPLE_ID 提供 Apple Account。"
-        fi
-        collect_fresh_configuration
-        set_project_name "$CONTAINER_NAME"
+        if adopt_existing_container; then
+            existing_install="true"
+            info "检测到已有容器 $CONTAINER_NAME，正在自动恢复 .env 和安装器标记。"
+            prepare_directories
+            write_new_environment
+        else
+            if [[ -e "$marker_path" || -L "$marker_path" ]]; then
+                load_managed_project || die "安装器管理标记无效：$marker_path"
+                interrupted_install="true"
+                info "检测到上次中断的安装，将自动继续。"
+            elif [[ -d "$INSTALL_DIR" ]] && \
+                [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+                if is_recognized_install_directory; then
+                    die "识别到旧部署文件，但没有 .env 或可接管的 iCloudHarbor 容器；为避免切换到错误的数据目录，已停止。"
+                fi
+                die "安装目录包含无法识别的文件，已停止：$INSTALL_DIR"
+            fi
+            if ! has_tty && [[ -z "${IH_APPLE_ID:-}" ]]; then
+                die "无交互终端时必须通过 IH_APPLE_ID 提供 Apple Account。"
+            fi
+            collect_fresh_configuration
+            if [[ "$interrupted_install" == "false" ]]; then
+                set_project_name "$CONTAINER_NAME"
+            fi
 
-        if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
-            die "已存在同名容器 $CONTAINER_NAME；请使用其他 IH_CONTAINER_NAME 或先确认旧容器归属。"
+            if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
+                die "已存在不属于 iCloudHarbor 的同名容器 $CONTAINER_NAME。"
+            fi
+
+            printf '\n将使用以下自动配置：\n'
+            printf '  Apple Account: %s\n' "$APPLE_ID"
+            printf '  安装目录:      %s\n' "$INSTALL_DIR"
+            printf '  配置目录:      %s\n' "$CONFIG_PATH"
+            printf '  照片目录:      %s\n' "$PHOTOS_PATH"
+            printf '  运行用户:      %s:%s\n' "$PUID" "$PGID"
+            printf '  时区/区域:     %s / %s\n' "$TIMEZONE" "$REGION"
+            printf '  同步间隔:      %s 小时\n\n' "$SYNC_INTERVAL"
+
+            prepare_directories
+            write_new_environment
         fi
-
-        printf '\n安装摘要：\n'
-        printf '  Apple Account: %s\n' "$APPLE_ID"
-        printf '  安装目录:      %s\n' "$INSTALL_DIR"
-        printf '  配置目录:      %s\n' "$CONFIG_PATH"
-        printf '  照片目录:      %s\n' "$PHOTOS_PATH"
-        printf '  运行用户:      %s:%s\n' "$PUID" "$PGID"
-        printf '  时区/区域:     %s / %s\n' "$TIMEZONE" "$REGION"
-        printf '  同步间隔:      %s 小时\n\n' "$SYNC_INTERVAL"
-        confirm "确认创建目录并启动 iCloudHarbor？" "yes" || die "已取消安装。"
-
-        prepare_directories
-        write_new_environment
     fi
 
     download_deployment_files
@@ -666,14 +817,13 @@ main() {
     deploy_container
 
     if [[ "$existing_install" == "false" ]] && has_tty; then
-        if confirm "是否现在输入 Apple 密码和验证码完成首次认证？" "yes"; then
-            if compose exec "$SERVICE_NAME" icloudharbor setup < /dev/tty; then
-                success "首次认证完成，后台已经接手同步。"
-            else
-                warn "首次认证未完成；安装文件和容器已保留，可稍后重新运行 setup。"
-                print_commands
-                exit 1
-            fi
+        info "请输入 Apple 密码和验证码完成首次认证。"
+        if compose exec "$SERVICE_NAME" icloudharbor setup < /dev/tty; then
+            success "首次认证完成，后台已经接手同步。"
+        else
+            warn "首次认证未完成；安装文件和容器已保留，可稍后重新运行 setup。"
+            print_commands
+            exit 1
         fi
     fi
 

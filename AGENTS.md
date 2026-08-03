@@ -54,9 +54,9 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 中国大陆和全球 iCloud 服务端点，`region=auto` 会优先复用 Session 中的区域信息。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
-- `deploy/install.sh` 提供面向 Linux 和群晖 SSH 的 `curl | sudo bash` 安装向导：通过
-  `/dev/tty` 收集非敏感部署参数，创建挂载标记，拉取并启动生产镜像，运行 `status` 后再把
-  Apple 密码和验证码输入交给容器内的 `setup`。
+- `deploy/install.sh` 提供面向 Linux 和群晖 SSH 的 `curl | sudo bash` 自动安装：按平台选择
+  安全默认目录和参数，全新安装只通过 `/dev/tty` 询问 Apple Account，创建挂载标记、拉取并
+  启动生产镜像、运行 `status` 后，直接把 Apple 密码和验证码输入交给容器内的 `setup`。
 - `icloudharbor setup` 是唯一认证入口：首次以星号遮罩读取密码、完成认证并保存
   本地续期凭据；凭据已存在时自动续期，Apple 要求时只询问验证码。成功后向容器后台
   提交一次同步请求并退出，下载统一显示在主容器日志。
@@ -167,9 +167,10 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `Dockerfile`：多阶段生产镜像；构建依赖与运行镜像分离。
 - `docker-compose.yml`：从 Docker Hub 拉取生产镜像，并配置必需参数与持久化卷。
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
-- `deploy/install.sh`：幂等 Docker 安装/更新向导；首次生成 root 管理的 `.env`，默认把容器
-  可写状态放在安装目录的 `data/config`，重跑必须保留所有现有配置和持久化数据，只更新受
-  管理的 Compose 文件与镜像。
+- `deploy/install.sh`：幂等 Docker 自动安装/更新器；首次生成 root 管理的 `.env`，默认把
+  容器可写状态放在安装目录的 `data/config`。重跑必须保留所有现有配置和持久化数据，只更新
+  受管理的 Compose 文件与镜像；旧部署缺少 `.env` 时可从经过镜像、挂载和字段校验的现有
+  容器恢复公开参数。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
@@ -263,12 +264,17 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
   通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
-- 一键安装器必须从 `/dev/tty` 读取交互输入；经管道执行时不得从标准输入读取提示答案。
+- 一键安装器仅可从 `/dev/tty` 读取 Apple Account、密码和验证码；经管道执行时不得从标准
+  输入读取交互内容。安装路径、照片路径、UID/GID、时区、区域和同步间隔使用安全默认值或
+  调用者显式提供的 `IH_*` 环境变量，不再逐项询问或增加确认步骤。
 - 一键安装的控制目录和 `.env` 必须由 root 管理，不能把控制目录直接挂载为容器可写的
   `/config`；Compose 项目名保存在安装器管理标记中，重跑时不得重新推断或任意改变。
 - 安装器只可调整自己新建的专用目录，不得递归 `chown` 已有照片库或擅自修改 NAS ACL。
 - 检测到已有 `.env` 时，安装器不得覆盖账号、路径、通知密钥或任何持久化内容；只能更新
   Compose 文件、拉取镜像、重建容器并重新执行 `status`。
+- 已有安装目录缺少 `.env` 时，只能接管镜像属于 iCloudHarbor 且 `/config`、`/photos` 挂载和
+  必需环境参数全部通过校验的现有容器；重建 `.env` 时只复制公开支持的项目参数，必须保留
+  通知、自动清理等设置，不得复制系统环境或在终端输出 Secret。无法确认归属时必须停止。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
 - Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`

@@ -253,11 +253,17 @@ Telegram 和企业微信正文最多列出 50 个文件名，超出部分提示�
 curl -fsSL https://raw.githubusercontent.com/lwx-cloud/icloudHarbor/main/deploy/install.sh | sudo bash
 ```
 
-向导会询问本章的新手参数、创建挂载标记、启动容器并运行 `status`，随后可直接进入交互认证。
-Apple 密码和验证码始终只由容器内的 `icloudharbor setup` 读取，不会写入 `.env` 或命令参数。
-重复运行安装器只更新 Compose 和镜像，不覆盖现有配置、数据库、Session、凭据或照片。下面是
-等价的手动部署步骤。一键安装默认把运行数据放在安装目录的 `data/config`，让 root 管理的
-`.env`、Compose 与容器可写数据分离；因此配置目录不能与安装目录完全相同。
+安装器会自动选择本章新手参数的安全默认值；全新安装只询问 Apple Account，然后创建挂载
+标记、启动容器、运行 `status` 并直接进入交互认证。Apple 密码和验证码始终只由容器内的
+`icloudharbor setup` 读取，不会写入 `.env` 或命令参数。路径、UID/GID、区域和同步频率等
+自定义项可在执行命令前传入同名 `IH_*` 环境变量。
+
+重复运行安装器只更新 Compose 和镜像，不覆盖现有配置、数据库、Session、凭据或照片。若旧
+部署没有 `.env`，但存在镜像和挂载均可验证的 `icloudharbor` 容器，安装器会从容器恢复公开
+参数并重建权限为 `0600` 的 `.env`；通知参数和 `IH_AUTO_DELETE` 等设置会一并保留，系统环境
+不会被复制。无法确认归属的非空目录仍会停止，避免误用新的数据路径。下面是等价的手动部署
+步骤。一键安装默认把运行数据放在安装目录的 `data/config`，让 root 管理的 `.env`、Compose
+与容器可写数据分离；因此配置目录不能与安装目录完全相同。
 
 **1. 准备目录和挂载标记**（安全开关：没有它就拒绝下载，防止照片卷未挂载时写爆容器层）：
 
