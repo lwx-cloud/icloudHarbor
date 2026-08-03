@@ -21,6 +21,7 @@ from icloudharbor.database.models import (
     AssetRow,
     ConfigRevisionRow,
     LibraryRow,
+    LocalArtifactRow,
     LocalFileRow,
     LockRow,
     NotificationStateRow,
@@ -39,6 +40,29 @@ class LocalFileState:
     size: int
     sha256: str | None
     status: str
+
+
+@dataclass(slots=True, frozen=True)
+class LocalArtifactState:
+    id: int
+    root: str
+    relative_path: str
+    kind: str
+    size: int
+    sha256: str
+    status: str
+
+
+@dataclass(slots=True, frozen=True)
+class ManagedLocalFile:
+    id: int
+    relative_path: str
+    size: int
+    sha256: str | None
+    status: str
+    resource_type: str
+    version: str
+    artifacts: tuple[LocalArtifactState, ...]
 
 
 @dataclass(slots=True, frozen=True)
@@ -287,6 +311,209 @@ class StateRepository:
                     },
                 )
             )
+
+    def managed_files_for_asset(
+        self,
+        account_id: str,
+        library_id: str,
+        asset_id: str,
+    ) -> list[ManagedLocalFile]:
+        with self.database.sessions() as session:
+            rows = session.scalars(
+                select(LocalFileRow)
+                .join(ResourceRow)
+                .join(AssetRow)
+                .join(LibraryRow)
+                .where(
+                    LibraryRow.account_id == account_id,
+                    LibraryRow.remote_library_id == library_id,
+                    AssetRow.remote_asset_id == asset_id,
+                )
+                .order_by(LocalFileRow.id)
+            ).all()
+            managed: list[ManagedLocalFile] = []
+            for row in rows:
+                artifacts = tuple(
+                    LocalArtifactState(
+                        artifact.id,
+                        artifact.root,
+                        artifact.relative_path,
+                        artifact.kind,
+                        artifact.size,
+                        artifact.sha256,
+                        artifact.status,
+                    )
+                    for artifact in row.artifacts
+                    if artifact.status != "DELETED_REMOTE"
+                )
+                if row.status == "DELETED_REMOTE" and not artifacts:
+                    continue
+                managed.append(
+                    ManagedLocalFile(
+                        row.id,
+                        row.relative_path,
+                        row.size,
+                        row.sha256,
+                        row.status,
+                        row.resource.resource_type,
+                        row.resource.version,
+                        artifacts,
+                    )
+                )
+            return managed
+
+    def local_path_asset_ids(
+        self,
+        account_id: str,
+        *,
+        root: str,
+        relative_path: str,
+    ) -> set[str]:
+        with self.database.sessions() as session:
+            if root not in {"destination", "jpeg"}:
+                raise ValueError(f"未知本地文件根目录：{root}")
+
+            owners: set[str] = set()
+            if root == "destination":
+                owners.update(
+                    session.scalars(
+                        select(AssetRow.remote_asset_id)
+                        .join(ResourceRow)
+                        .join(LocalFileRow)
+                        .join(LibraryRow, LibraryRow.id == AssetRow.library_id)
+                        .where(
+                            LibraryRow.account_id == account_id,
+                            LocalFileRow.relative_path == relative_path,
+                        )
+                    ).all()
+                )
+            owners.update(
+                session.scalars(
+                    select(AssetRow.remote_asset_id)
+                    .join(ResourceRow)
+                    .join(LocalFileRow)
+                    .join(LocalArtifactRow)
+                    .join(LibraryRow, LibraryRow.id == AssetRow.library_id)
+                    .where(
+                        LibraryRow.account_id == account_id,
+                        LocalArtifactRow.root == root,
+                        LocalArtifactRow.relative_path == relative_path,
+                    )
+                ).all()
+            )
+            return owners
+
+    def record_local_artifact(
+        self,
+        account_id: str,
+        library_id: str,
+        asset_id: str,
+        resource_type: str,
+        version: str,
+        *,
+        root: str,
+        relative_path: str,
+        kind: str,
+        size: int,
+        sha256: str,
+    ) -> int:
+        with self.database.sessions.begin() as session:
+            local_file_id = session.scalar(
+                select(LocalFileRow.id)
+                .join(ResourceRow)
+                .join(AssetRow)
+                .join(LibraryRow)
+                .where(
+                    LibraryRow.account_id == account_id,
+                    LibraryRow.remote_library_id == library_id,
+                    AssetRow.remote_asset_id == asset_id,
+                    ResourceRow.resource_type == resource_type,
+                    ResourceRow.version == version,
+                )
+            )
+            if local_file_id is None:
+                raise KeyError((account_id, library_id, asset_id, resource_type, version))
+            artifact_insert = sqlite_insert(LocalArtifactRow).values(
+                local_file_id=local_file_id,
+                root=root,
+                relative_path=relative_path,
+                kind=kind,
+                size=size,
+                sha256=sha256,
+                status="VERIFIED",
+            )
+            return session.execute(
+                artifact_insert.on_conflict_do_update(
+                    index_elements=[
+                        LocalArtifactRow.local_file_id,
+                        LocalArtifactRow.root,
+                        LocalArtifactRow.relative_path,
+                    ],
+                    set_={
+                        "kind": artifact_insert.excluded.kind,
+                        "size": artifact_insert.excluded.size,
+                        "sha256": artifact_insert.excluded.sha256,
+                        "status": artifact_insert.excluded.status,
+                    },
+                ).returning(LocalArtifactRow.id)
+            ).scalar_one()
+
+    def prepare_local_deletion(
+        self,
+        account_id: str,
+        library_id: str,
+        asset_id: str,
+        local_file_ids: list[int],
+        artifact_ids: list[int],
+    ) -> None:
+        with self.database.sessions.begin() as session:
+            library_row_id = session.scalar(
+                select(LibraryRow.id).where(
+                    LibraryRow.account_id == account_id,
+                    LibraryRow.remote_library_id == library_id,
+                )
+            )
+            if library_row_id is None:
+                raise KeyError((account_id, library_id))
+            asset_row = session.scalar(
+                select(AssetRow).where(
+                    AssetRow.library_id == library_row_id,
+                    AssetRow.remote_asset_id == asset_id,
+                )
+            )
+            if asset_row is None:
+                raise KeyError((account_id, library_id, asset_id))
+            asset_row.remote_deleted = True
+            if local_file_ids:
+                session.execute(
+                    update(LocalFileRow)
+                    .where(LocalFileRow.id.in_(local_file_ids))
+                    .values(status="DELETE_PENDING")
+                )
+            if artifact_ids:
+                session.execute(
+                    update(LocalArtifactRow)
+                    .where(LocalArtifactRow.id.in_(artifact_ids))
+                    .values(status="DELETE_PENDING")
+                )
+
+    def set_local_file_status(self, local_file_id: int, status: str) -> None:
+        with self.database.sessions.begin() as session:
+            result = session.execute(
+                update(LocalFileRow).where(LocalFileRow.id == local_file_id).values(status=status)
+            )
+            if result.rowcount != 1:
+                raise KeyError(local_file_id)
+
+    def set_local_artifact_status(self, artifact_id: int, status: str) -> None:
+        with self.database.sessions.begin() as session:
+            result = session.execute(
+                update(LocalArtifactRow)
+                .where(LocalArtifactRow.id == artifact_id)
+                .values(status=status)
+            )
+            if result.rowcount != 1:
+                raise KeyError(artifact_id)
 
     def create_run(
         self,

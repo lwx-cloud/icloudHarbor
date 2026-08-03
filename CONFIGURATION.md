@@ -29,6 +29,7 @@
 | `IH_REGION` | 否 | `auto` | `auto`、`global`、`china` | 选择 Apple 全球区或中国大陆区服务；通常保持 `auto`。 |
 | `IH_SYNC_INTERVAL` | 否 | `24` | 只能是 `6`、`12`、`24` | 设置两次自动检查 iCloud 的间隔小时数；`12` 表示每 12 小时一次，不是每天 12 点。推荐 `12` 或 `24`；`6` 请求更频繁，可能增加 Apple 限流或风控概率。 |
 | `IH_RUN_ON_START` | 否 | `true` | `true`、`false` | 是否在容器启动后安排一次同步。 |
+| `IH_AUTO_DELETE` | 否 | `false` | `true`、`false` | 是否读取 iCloud“最近删除”并清理精确匹配、内容未变化的本地文件；只删除本地，不删除 iCloud。 |
 | `IH_DOWNLOAD_VIDEOS` | 否 | `true` | `true`、`false` | 是否下载普通视频，不控制 Live Photo。 |
 | `IH_DOWNLOAD_LIVE_PHOTOS` | 否 | `true` | `true`、`false` | 是否下载 Live Photo；`false` 会跳过整个 Live Photo 项目。 |
 | `IH_CONVERT_HEIC_TO_JPEG` | 否 | `false` | `true`、`false` | 是否保留 HEIC 原片并额外生成 JPEG。 |
@@ -166,6 +167,20 @@
 | `IH_FULL_SCAN_INTERVAL`（`accounts[].sync.full_scan_interval`） | 否 | `30d` | 时长，如 `12h`、`7d`、`4w` | 设置增量模式下定期完整扫描的间隔。 |
 | `IH_DOWNLOAD_DELAY`（`accounts[].sync.download_delay`） | 否 | `0` | `0`–`60` 的整数分钟 | 设置容器启动后首次同步的延迟。 |
 
+`IH_AUTO_DELETE=true` 时，每次正式同步和 `sync plan` 都会读取个人图库的“最近删除”。程序只按
+账号、图库和 iCloud Asset ID 查找自己记录过的本地文件，不会仅凭文件名删除；删除前还会确认
+路径仍在受管目录内、不是符号链接，并重新校验大小和 SHA-256。文件被本地修改、路径存在归属
+冲突或无法安全确认时，本轮会失败关闭并保留文件。共享图库的“最近删除”当前不会参与清理。
+
+Apple 的“最近删除”只保留有限时间，因此已经从该相册永久移除的旧项目无法再被识别。建议首次
+开启前先保持持久配置为 `false`，备份 SQLite 和照片目录，再临时预览候选项：
+
+```bash
+docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor sync plan
+```
+
+计划模式只展示、不删除文件。确认后再把 `.env` 改为 `IH_AUTO_DELETE=true` 并重建容器。
+
 #### 下载可靠性
 
 | 参数名（YAML 路径） | 必填 | 默认值 | 可选值或格式 | 说明 |
@@ -213,7 +228,7 @@
 | `runtime.temp_path` | 否 | `/config/tmp` | 容器内路径 | 设置运行时临时目录，程序会自动创建。 |
 | `accounts[].enabled` | 否 | `true` | `true`、`false` | 是否启用账号；当前必须且只能启用一个账号。 |
 | `accounts[].destination.path` | 是 | `/photos`（自动生成） | 容器内路径 | 设置容器内照片下载目录。 |
-| `accounts[].sync.mode` | 否 | `backup` | 只能是 `backup` | 固定为 iCloud 到本地的只读备份。 |
+| `accounts[].sync.mode` | 否 | `backup` | 只能是 `backup` | 固定为 iCloud 到本地的单向备份；是否同步“最近删除”由 `auto_delete` 单独控制。 |
 | `accounts[].sync.schedule.interval` | 否 | 空 | 时长，如 `12h`、`1d`、`1w` | 设置同步间隔，与 `cron` 二选一。 |
 | `accounts[].sync.schedule.cron` | 否 | 空 | 五段 Cron，如 `0 3 * * *` | 设置固定时间同步，与 `interval` 二选一。 |
 | `security.redact_apple_id` | 否 | `true` | `true`、`false` | 是否在用户可见输出中隐藏 Apple ID。 |
@@ -429,7 +444,8 @@ accounts:
       conflict_policy: suffix_asset_id
 
     sync:
-      mode: backup            # 只能是 backup，禁止镜像删除
+      mode: backup            # 只能是 backup，永不删除 iCloud 内容
+      auto_delete: false      # true 时把 iCloud“最近删除”同步为安全的本地删除
       strategy: cursor
       full_scan_interval: 30d
       schedule: 24h
@@ -634,7 +650,10 @@ docker compose exec icloudharbor icloudharbor healthcheck
 - `/config` 包含数据库、Apple Session、本地续期凭据和通知密钥，**必须限制访问并纳入备份**；升级或迁移前至少备份整个 `IH_CONFIG_PATH`。
 - Apple 密码以 AES-256-GCM 保存，但密钥和密文都在 `/config/credentials`，宿主机 root 仍可恢复——它防的是意外明文泄露，不是硬件级保护。
 - Apple Session 当前未加密。
-- 下载只从 iCloud 写入本地：不删 iCloud 内容，不把本地删除同步到远端。
+- 永远不删除 iCloud 内容，也不把本地删除同步到远端。默认不清理本地；只有显式设置
+  `IH_AUTO_DELETE=true`，才会把个人图库“最近删除”中的精确 Asset ID 匹配同步为本地删除。
+- 本地自动删除前会校验受管路径、归属、文件类型、大小和 SHA-256；人工修改过的文件、符号链接、
+  未被 SQLite 跟踪的文件和空目录都不会删除。开启前应备份 `/config` 和照片目录。
 - 只有全部资源成功才提交新游标；下载先写同目录 `.part`，校验后原子替换正式文件。
 
 ---
@@ -663,10 +682,12 @@ docker compose exec icloudharbor icloudharbor healthcheck
 - `webhook_server/port/path/id/https` 五个参数拼 URL → 一个 `url` 搞定；
 - `single_pass` → 需要单次执行时直接 `icloudharbor sync run`，常驻容器模型不变；
 - `albums_with_dates`/`libraries_with_dates` → 模板直接实现：`IH_FOLDER_STRUCTURE={album}/{created:%Y/%m/%d}`。
+- `auto_delete` → `IH_AUTO_DELETE`；只按 SQLite 中的 iCloud Asset ID 精确匹配，并在删除本地文件前
+  重新校验路径和 SHA-256，不使用同名猜测。
 
 ### 不会照搬的 icloudpd 参数
 
-- `auto_delete`、`delete_after_download`、`keep_icloud_recent_days`：删 iCloud 内容，违反只读备份原则；
+- `delete_after_download`、`keep_icloud_recent_days`：会主动删除 iCloud 内容，违反远端只读原则；
 - `delete_accompanying`、`delete_empty_directories`：自动清理本地文件，不做；
 - `nextcloud_*`、`sideways_copy_videos*`：上传/二次搬运，超出本地备份范围；
 - `set_exif_datetime`：修改下载后的原始媒体，会破坏哈希幂等判断；

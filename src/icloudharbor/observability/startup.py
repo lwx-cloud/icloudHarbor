@@ -101,6 +101,8 @@ def startup_summary(
     if account.sync.download_delay > 0:
         lines.append(f"启动延迟：{account.sync.download_delay} 分钟")
 
+    lines.append(f"iCloud 最近删除同步：{_switch(account.sync.auto_delete)}")
+
     if account.destination.synology_photos_app_fix:
         lines.append("Synology Photos 索引兼容：启用")
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from icloudharbor.config.models import AccountConfig
-from icloudharbor.database.repository import LocalFileState, StateRepository
+from icloudharbor.database.repository import LocalFileState, ManagedLocalFile, StateRepository
 from icloudharbor.photos.naming import PathNamer
 from icloudharbor.photos.policies import asset_allowed, select_resources
 from icloudharbor.protocol.models import RemoteAsset, RemoteResource
@@ -21,6 +21,16 @@ class DownloadTask:
     repair: bool = False
 
 
+@dataclass(slots=True, frozen=True)
+class LocalDeletionTask:
+    asset: RemoteAsset
+    local_files: tuple[ManagedLocalFile, ...]
+
+    @property
+    def file_count(self) -> int:
+        return sum(1 + len(item.artifacts) for item in self.local_files)
+
+
 @dataclass(slots=True)
 class SyncPlan:
     downloads: list[DownloadTask] = field(default_factory=list)
@@ -30,6 +40,7 @@ class SyncPlan:
     local_quarantines: list[Path] = field(default_factory=list)
     remote_delete_candidates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    local_deletions: list[LocalDeletionTask] = field(default_factory=list)
 
     @property
     def download_count(self) -> int:
@@ -38,6 +49,10 @@ class SyncPlan:
     @property
     def estimated_bytes(self) -> int:
         return sum(task.resource.size or 0 for task in [*self.downloads, *self.updates])
+
+    @property
+    def local_delete_count(self) -> int:
+        return sum(task.file_count for task in self.local_deletions)
 
 
 class AssetPlanner:
@@ -111,6 +126,32 @@ class AssetPlanner:
                 reserved.add(relative)
                 plan.downloads.append(DownloadTask(asset, resource, relative))
         return plan
+
+    def add_local_deletions(
+        self,
+        plan: SyncPlan,
+        deleted_assets: list[RemoteAsset],
+        account: AccountConfig,
+        active_asset_ids: set[tuple[str, str]],
+    ) -> None:
+        for asset in deleted_assets:
+            identity = (asset.library_id, asset.asset_id)
+            if identity in active_asset_ids:
+                plan.warnings.append(
+                    f"Asset {asset.asset_id} 同时出现在正常图库和最近删除，已拒绝本地删除"
+                )
+                continue
+            local_files = self.repository.managed_files_for_asset(
+                account.id,
+                asset.library_id,
+                asset.asset_id,
+            )
+            if not local_files:
+                plan.warnings.append(
+                    f"最近删除 Asset {asset.asset_id}（{asset.filename}）没有可验证的本地记录"
+                )
+                continue
+            plan.local_deletions.append(LocalDeletionTask(asset, tuple(local_files)))
 
     @staticmethod
     def _is_complete(

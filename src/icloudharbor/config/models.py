@@ -155,6 +155,7 @@ class SyncConfig(StrictModel):
     schedule: str | ScheduleConfig | None = None
     run_on_start: bool = True
     download_delay: Annotated[int, Field(ge=0, le=60)] = 0
+    auto_delete: bool = False
 
     @field_validator("full_scan_interval", mode="before")
     @classmethod

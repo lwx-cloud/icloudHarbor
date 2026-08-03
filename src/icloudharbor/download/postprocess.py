@@ -47,7 +47,7 @@ class MediaPostProcessor:
         target: Path,
         relative_path: Path,
         created_at: datetime,
-    ) -> None:
+    ) -> tuple[Path, ...]:
         self._apply_file_mode(target)
         jpeg, jpeg_created = self.ensure_jpeg(target, relative_path)
         if self.account.destination.synology_photos_app_fix:
@@ -57,13 +57,14 @@ class MediaPostProcessor:
         self._apply_capture_time(target, created_at)
         if jpeg is not None:
             self._apply_capture_time(jpeg, created_at)
+        return (jpeg,) if jpeg is not None else ()
 
     def process_existing(
         self,
         target: Path,
         relative_path: Path,
         created_at: datetime,
-    ) -> None:
+    ) -> tuple[Path, ...]:
         self.prepare_parent(target.parent)
         self._apply_file_mode(target)
         jpeg, _ = self.ensure_jpeg(target, relative_path)
@@ -72,12 +73,13 @@ class MediaPostProcessor:
         self._apply_capture_time(target, created_at)
         if jpeg is not None:
             self._apply_capture_time(jpeg, created_at)
+        return (jpeg,) if jpeg is not None else ()
 
     def ensure_jpeg(self, source: Path, relative_path: Path) -> tuple[Path | None, bool]:
         media = self.account.media
         if not media.convert_heic_to_jpeg or source.suffix.lower() not in {".heic", ".heif"}:
             return None, False
-        target = self._jpeg_target(relative_path)
+        target = self.jpeg_target(relative_path)
         if target.is_file():
             return target, False
         self.prepare_parent(target.parent)
@@ -91,7 +93,7 @@ class MediaPostProcessor:
         LOGGER.info(f"已生成 JPEG：{display_host_path(target)}")
         return target, True
 
-    def _jpeg_target(self, relative_path: Path) -> Path:
+    def jpeg_target(self, relative_path: Path) -> Path:
         root = (self.account.media.jpeg_path or self.destination).resolve()
         jpeg_relative = relative_path.with_suffix(".JPG")
         if root == self.destination and jpeg_relative in self.protected_relative_paths:

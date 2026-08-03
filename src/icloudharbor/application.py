@@ -223,7 +223,8 @@ class HarborApplication:
         elapsed = int(time.monotonic() - started)
         LOGGER.info(
             f"同步结束：状态={result.status}；下载={result.downloaded_count}；"
-            f"跳过={result.skipped_count}；失败={result.failed_count}；"
+            f"删除本地={result.deleted_count}；跳过={result.skipped_count}；"
+            f"失败={result.failed_count}；"
             f"用时={elapsed // 3600:02d}:{elapsed % 3600 // 60:02d}:{elapsed % 60:02d}"
         )
         if result.status != "SKIPPED_ALREADY_RUNNING":
@@ -333,7 +334,9 @@ class HarborApplication:
             return
         if result.status == "COMPLETED":
             event_type = NotificationType.SYNC_COMPLETED
-            title_suffix = "同步完成" if result.downloaded_count else "已是最新"
+            title_suffix = (
+                "同步完成" if result.downloaded_count or result.deleted_count else "已是最新"
+            )
         elif result.error_code in AUTH_REQUIRED_ERROR_CODES:
             event_type = NotificationType.AUTH_REQUIRED
             title_suffix = "需要处理 Apple 认证"
@@ -353,6 +356,9 @@ class HarborApplication:
                 lines.append("本次检查完成，没有发现需要下载的新文件。")
             if result.skipped_count:
                 lines.append(f"本地已有：{result.skipped_count} 个文件")
+            if result.deleted_count:
+                lines.append(f"按 iCloud 最近删除清理：{result.deleted_count} 个本地文件")
+                lines.append(f"释放空间：{self._format_data_size(result.bytes_deleted)}")
         elif result.status == "PARTIAL":
             lines.extend(
                 [
@@ -364,6 +370,10 @@ class HarborApplication:
                 lines.append(f"本地已有：{result.skipped_count} 个文件")
             if result.bytes_downloaded:
                 lines.append(f"下载数据：{self._format_data_size(result.bytes_downloaded)}")
+            if result.deleted_count:
+                lines.append(f"已清理本地：{result.deleted_count} 个文件")
+            if result.delete_failed_count:
+                lines.append(f"本地删除失败：{result.delete_failed_count} 个 Asset")
             lines.append("部分文件未能完成，请查看容器日志后重试。")
         else:
             lines.append(

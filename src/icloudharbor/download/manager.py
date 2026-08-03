@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 
 import structlog
 
@@ -61,11 +62,12 @@ class DownloadManager:
         for task in plan.skips:
             source = self.destination / task.relative_path
             try:
-                self.postprocessor.process_existing(
+                artifacts = self.postprocessor.process_existing(
                     source,
                     task.relative_path,
                     task.asset.created_at,
                 )
+                self._record_artifacts(task, artifacts)
             except (OSError, ValueError) as exc:
                 path = display_download_path(
                     self.account.destination.path,
@@ -124,11 +126,12 @@ class DownloadManager:
             try:
                 size = self._download_once(task)
                 target = (self.destination / task.relative_path).resolve()
-                self.postprocessor.process_download(
+                artifacts = self.postprocessor.process_download(
                     target,
                     task.relative_path,
                     task.asset.created_at,
                 )
+                self._record_artifacts(task, artifacts)
                 return DownloadOutcome(task, True, bytes_downloaded=size)
             except (HarborError, ProtocolError, OSError) as exc:
                 last_error = exc
@@ -204,6 +207,37 @@ class DownloadManager:
         )
         os.replace(partial, target)
         return size
+
+    def _record_artifacts(self, task: DownloadTask, paths: tuple[Path, ...]) -> None:
+        jpeg_root = (self.account.media.jpeg_path or self.destination).resolve()
+        for path in paths:
+            resolved = path.resolve()
+            if resolved.is_relative_to(self.destination):
+                root = "destination"
+                relative = resolved.relative_to(self.destination)
+            elif resolved.is_relative_to(jpeg_root):
+                root = "jpeg"
+                relative = resolved.relative_to(jpeg_root)
+            else:
+                raise HarborError("派生文件路径越过允许目录", ErrorCode.FILE_PERMISSION_ERROR)
+            size, sha256 = verify_file(
+                resolved,
+                expected_size=None,
+                expected_checksum=None,
+                chunk_size=DOWNLOAD_CHUNK_SIZE,
+            )
+            self.repository.record_local_artifact(
+                task.asset.account_id,
+                task.asset.library_id,
+                task.asset.asset_id,
+                task.resource.resource_type,
+                task.resource.version,
+                root=root,
+                relative_path=relative.as_posix(),
+                kind="converted_jpeg",
+                size=size,
+                sha256=sha256,
+            )
 
     @staticmethod
     def _retryable(exc: Exception) -> bool:

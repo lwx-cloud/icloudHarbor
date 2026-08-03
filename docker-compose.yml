@@ -7,6 +7,7 @@ services:
     # `.env.example` 已列出新手常用项；高级能力见 CONFIGURATION.md。
     env_file:
       - .env
+    # IH_AUTO_DELETE 等 IH_* 参数由上面的 .env 传入；缺省时保留 YAML 或程序默认值。
 
     environment:
       - TZ=${IH_TIMEZONE:-UTC}

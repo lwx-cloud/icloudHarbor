@@ -47,6 +47,9 @@ class ICloudProtocol(ABC):
     def list_assets(self, query: AssetQuery) -> list[RemoteAsset]: ...
 
     @abstractmethod
+    def list_recently_deleted(self, library_id: str) -> list[RemoteAsset]: ...
+
+    @abstractmethod
     def get_sync_cursor(self, library_id: str) -> str | None: ...
 
     @abstractmethod

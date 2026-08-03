@@ -476,6 +476,9 @@ def _show_plan(result: SyncExecution) -> None:
     typer.echo(f"待下载：{plan.download_count}")
     typer.echo(f"预计数据：{plan.estimated_bytes} 字节")
     typer.echo(f"已存在：{len(plan.skips)}")
+    typer.echo(f"待删除本地文件：{plan.local_delete_count}")
+    for task in plan.local_deletions:
+        typer.echo(f"  删除候选：{task.asset.filename}（Asset {task.asset.asset_id}）")
     for warning in plan.warnings:
         typer.echo(f"警告：{warning}")
 
@@ -511,8 +514,9 @@ def sync_run(
     _show_plan(result)
     if not dry_run:
         typer.echo(
-            f"下载={result.downloaded_count} 跳过={result.skipped_count} "
-            f"失败={result.failed_count} 数据={result.bytes_downloaded} 字节"
+            f"下载={result.downloaded_count} 删除本地={result.deleted_count} "
+            f"跳过={result.skipped_count} 失败={result.failed_count} "
+            f"下载数据={result.bytes_downloaded} 字节 释放空间={result.bytes_deleted} 字节"
         )
     if result.status in {"FAILED", "PARTIAL"}:
         raise typer.Exit(1)
@@ -717,7 +721,10 @@ def daemon(ctx: typer.Context) -> None:
     credential_status = "已保存" if instance.credential_store(account).exists() else "未保存"
     LOGGER.info(f"本地续期凭据：{credential_status}")
     LOGGER.info(f"Apple 会话状态：{instance.repository.get_auth_status(account.id).value}")
-    LOGGER.info("安全模式：只从 iCloud 备份到本地，不会删除云端或本地文件")
+    if account.sync.auto_delete:
+        LOGGER.info("安全模式：永不删除 iCloud；仅按最近删除精确清理已验证的本地文件")
+    else:
+        LOGGER.info("安全模式：只从 iCloud 备份到本地，不会删除云端或本地文件")
     _log_auth_guidance(instance, account)
 
     def scheduled(account_id: str) -> None:

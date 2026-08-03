@@ -37,14 +37,15 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 根据日期、媒体类型和命名规则生成确定的本地路径。
 - 使用 `.part` 文件、断点续传、重试、大小与 SHA-256 校验完成下载。
 - 使用 SQLite 保存远端资源、本地文件、同步游标、运行结果和锁状态。
-- 不删除 iCloud 中的内容，不把本地删除同步到远端，也不提供双向同步。
+- 不删除 iCloud 中的内容，不把本地删除同步到远端，也不提供双向同步；可选的本地清理只读取
+  iCloud“最近删除”，按已记录的 Asset ID 和文件哈希删除精确匹配项。
 
 它是独立实现，不调用其他 iCloud 下载容器的脚本或命令。第三方 Apple 协议适配集中在
 `protocol/pyicloud_adapter.py`，其余业务代码不直接依赖 `pyicloud`。
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.3.10`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.3.11`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -68,6 +69,8 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
   不会因 Live Photo、RAW/JPEG 或多尺寸资源同时完成而触发唯一键竞态。
 - 原始资源和转换 JPEG 的文件修改时间统一恢复为 iCloud 拍摄时间，全量扫描会校正历史文件。
 - 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
+- 可选 `IH_AUTO_DELETE` 本地清理，默认关闭；只扫描个人图库“最近删除”，按账号、图库和 Asset
+  ID 精确匹配 SQLite 记录，并在删除前复核路径归属、文件类型、大小与 SHA-256。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 - 企业微信兼容 icloudpd 的四个媒体 ID。认证临期窗口可配置，默认提前 7 天，同一天只成功
@@ -91,7 +94,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 多个启用账号。
 - 安全密钥和旧式两步认证的交互流程。
 - iCloud Session 文件加密。
-- 任何远端删除、本地清理、镜像同步或 Web UI。
+- 任何远端删除、同名猜测删除、未跟踪文件或空目录清理、完整镜像同步或 Web UI。
 
 配置模型会对危险或未实现能力“失败关闭”：`session_encryption` 必须为 `false`，
 `allow_remote_delete` 只能为 `false`。
@@ -191,10 +194,12 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `photos/policies.py`：媒体、RAW、版本、收藏、隐藏和日期策略。
 - `photos/naming.py`：安全路径渲染、跨平台字符清理和冲突处理。
 - `download/manager.py`：并发下载、断点续传、重试和原子落盘。
+- `download/deletion.py`：把“最近删除”的精确 Asset ID 匹配安全执行为本地删除，包含路径、归属
+  和 SHA-256 复核。
 - `download/postprocess.py`：文件权限、HEIC 转 JPEG 和 Synology Photos 索引触发。
 - `download/verifier.py`：始终计算本地大小与 SHA-256；远端提供有效期望值时再执行比较。
 - `download/retry.py`：带随机抖动的指数退避。
-- `database/models.py`：SQLite 数据结构，包括跨进程同步请求的代次状态。
+- `database/models.py`：SQLite 数据结构，包括跨进程同步请求代次和转换 JPEG 等派生文件记录。
 - `database/repository.py`：账号、图库、资源、运行记录、游标、锁和同步请求的数据访问。
 - `database/session.py`：SQLite 连接、WAL、外键、建表和完整性检查；当前没有独立迁移框架。
 - `scheduler/service.py`：Cron/间隔、启动时任务和进程内合并的立即任务。
@@ -259,6 +264,13 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 ## 6. 不可破坏的生产规则
 
 - 不得增加远端删除调用。
+- `auto_delete` 必须默认 `false`；开启时只能读取个人图库“最近删除”，不得把普通图库中暂时
+  不可见的 Asset 推断为已删除。
+- 本地自动删除只能使用账号、图库和 Asset ID 的精确 SQLite 记录；严禁按文件名或模糊信息猜测。
+- 删除前必须确认路径位于受管根目录、不是符号链接或目录、没有多 Asset 归属冲突，并重新校验
+  大小和 SHA-256。人工修改、未跟踪或无法确认的文件必须失败关闭，不删除空目录。
+- 删除意图和 `remote_deleted` 状态必须先提交 SQLite，再执行 `unlink`；中途退出后下轮应能幂等
+  继续，已删除项目恢复到普通图库时应重新下载。
 - 不得在没有挂载标记时下载。
 - 不得把 Apple 密码、验证码、Cookie、令牌或真实账号写入日志、测试、Git 或镜像层。
 - 不得让业务模块直接导入 `pyicloud`；协议变化只能在 `protocol/` 内处理。
@@ -366,6 +378,10 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   导致限流/服务不可用被误判为 UNKNOWN_PROTOCOL_ERROR 而不可重试的问题；_response_status
   增加 exc.code 整数回退识别 HTTP 状态码；UNKNOWN_PROTOCOL_ERROR 纳入可重试集合；
   兜底错误消息包含原始异常详情；默认并发下载数从 2 降为 1（串行），降低 Apple 限流概率。
+- 2026-08-03 的 0.3.11 本地删除同步：新增默认关闭的 `IH_AUTO_DELETE`，读取个人图库“最近删除”
+  并按账号、图库和 Asset ID 精确匹配已记录文件；删除前复核受管路径、归属、普通文件类型、
+  大小与 SHA-256，拒绝同名猜测、符号链接、人工修改和多 Asset 路径冲突；`sync plan` 可安全预览，
+  照片恢复到普通图库后会重新下载，始终不调用 iCloud 远端删除接口。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -388,7 +404,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.3.10`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.3.11`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

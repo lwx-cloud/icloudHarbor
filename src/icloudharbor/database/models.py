@@ -121,6 +121,28 @@ class LocalFileRow(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     resource: Mapped[ResourceRow] = relationship(back_populates="local_file")
+    artifacts: Mapped[list[LocalArtifactRow]] = relationship(
+        back_populates="local_file", cascade="all, delete-orphan"
+    )
+
+
+class LocalArtifactRow(Base):
+    """A generated local file, such as a JPEG derived from a downloaded HEIC."""
+
+    __tablename__ = "local_artifacts"
+    __table_args__ = (UniqueConstraint("local_file_id", "root", "relative_path"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    local_file_id: Mapped[int] = mapped_column(ForeignKey("local_files.id", ondelete="CASCADE"))
+    root: Mapped[str] = mapped_column(String(32))
+    relative_path: Mapped[str] = mapped_column(String(2048))
+    kind: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(64), default="VERIFIED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    local_file: Mapped[LocalFileRow] = relationship(back_populates="artifacts")
 
 
 class SyncRunRow(Base):

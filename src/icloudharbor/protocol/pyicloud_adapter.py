@@ -11,6 +11,7 @@ import io
 import json
 import mimetypes
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -259,6 +260,49 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                     result.append(normalized)
                     if query.limit is not None and len(result) >= query.limit:
                         return result
+            return result
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            raise self._map_exception(exc) from exc
+
+    def list_recently_deleted(self, library_id: str) -> list[RemoteAsset]:
+        """Return deleted assets without exposing pyicloud smart-album objects."""
+
+        api = self._require_api()
+        if library_id != "root":
+            raise ProtocolError(
+                f"图库不支持最近删除扫描：{library_id}",
+                ErrorCode.REMOTE_NOT_FOUND,
+            )
+        try:
+            library = api.photos.libraries.get(library_id)
+            if library is None:
+                raise ProtocolError("个人图库不可访问", ErrorCode.REMOTE_NOT_FOUND)
+            albums = getattr(library, "albums", None)
+            if albums is None:
+                albums = getattr(api.photos, "albums", None)
+            if albums is None:
+                raise ProtocolError("个人图库不提供最近删除相册", ErrorCode.REMOTE_NOT_FOUND)
+            album = albums.get("Recently Deleted")
+            if album is None and hasattr(albums, "find"):
+                album = albums.find("Recently Deleted")
+            if album is None:
+                raise ProtocolError("最近删除相册不可访问", ErrorCode.REMOTE_NOT_FOUND)
+
+            result: list[RemoteAsset] = []
+            seen: set[str] = set()
+            query = AssetQuery(self.account_id, library_id, album_id="Recently Deleted")
+            for raw_asset in album:
+                asset = self._normalize_asset(query, raw_asset)
+                if asset.asset_id in seen:
+                    continue
+                seen.add(asset.asset_id)
+                metadata = dict(asset.metadata)
+                deleted_at = self._deleted_at(raw_asset)
+                if deleted_at is not None:
+                    metadata["deleted_at"] = deleted_at.isoformat()
+                result.append(replace(asset, deleted=True, metadata=metadata))
             return result
         except ProtocolError:
             raise
@@ -623,6 +667,22 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             return float(value) if value is not None else None
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _deleted_at(cls, asset: Any) -> datetime | None:
+        record = getattr(asset, "_asset_record", None)
+        value: Any = None
+        if isinstance(record, dict):
+            field = record.get("fields", {}).get("dateExpunged")
+            value = field.get("value") if isinstance(field, dict) else field
+        else:
+            fields = getattr(record, "fields", None)
+            get_value = getattr(fields, "get_value", None)
+            if callable(get_value):
+                value = get_value("dateExpunged")
+        if value is None:
+            return None
+        return cls._to_datetime(value)
 
     @staticmethod
     def _response_status(exc: Exception) -> int | None:

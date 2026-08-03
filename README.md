@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 本文档对应源码版本 `0.3.10`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
+> 本文档对应源码版本 `0.3.11`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
 > 随时变化；请保留其他可靠备份。
 
 [快速开始](#快速开始) · [群晖部署](#群晖部署示例) · [认证续期](#认证续期与密码) ·
@@ -37,13 +37,15 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 - 流式下载、断点续传、指数退避、大小/SHA-256 校验和原子落盘。
 - SQLite 状态库、运行记录、数据库备份和三层并发锁。
 - 挂载标记、剩余空间、inode、写权限和数据库完整性保护。
+- 可选读取 iCloud“最近删除”，按 Asset ID 和 SHA-256 安全清理对应的本地文件。
 - 可选的 Bark、Server酱、Telegram、企业微信和通用 Webhook 通知。
 
 ## 使用边界
 
 - 只支持一个启用的 Apple Account；可同时选择该账号可访问的多个图库。
 - 暂不支持安全密钥认证和旧式两步认证。
-- 只执行 iCloud 到本地的单向备份，不删除 iCloud 内容，也不清理本地文件。
+- 只执行 iCloud 到本地的单向备份，永不删除 iCloud 内容。默认保留本地文件；只有显式开启
+  `IH_AUTO_DELETE` 时才同步个人图库“最近删除”中的精确匹配项。
 - Apple Session 文件当前未加密。
 - 项目与 Apple Inc. 无隶属、认可或赞助关系。
 
@@ -143,6 +145,7 @@ IH_TIMEZONE=Asia/Shanghai
 IH_REGION=auto
 IH_SYNC_INTERVAL=24
 IH_RUN_ON_START=true
+IH_AUTO_DELETE=false
 IH_DOWNLOAD_VIDEOS=true
 IH_DOWNLOAD_LIVE_PHOTOS=true
 ```
@@ -150,6 +153,15 @@ IH_DOWNLOAD_LIVE_PHOTOS=true
 `IH_SYNC_INTERVAL` 只能填写 `6`、`12` 或 `24`，数字就是小时，不需要写 Cron。推荐使用
 `12` 或 `24`；`6` 小时请求更频繁，可能增加 Apple 限流或风控概率。
 所有开关只需填写 `true` 或 `false`。照片默认始终下载；视频和 Live Photo 默认也会下载。
+`IH_AUTO_DELETE` 默认关闭。开启后只会删除数据库中 Asset ID 精确匹配且内容未被修改的本地
+文件；不会仅凭同名猜测，也不会删除 iCloud 内容。首次开启前先保持 `.env` 中的值为 `false`，
+备份 `/config` 和照片目录，再临时预览候选项：
+
+```bash
+docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor sync plan
+```
+
+确认计划后再把 `.env` 改为 `IH_AUTO_DELETE=true` 并重建容器。
 `IH_PUID` 和 `IH_PGID` 必须对配置目录和照片目录具有读写权限。只对刚创建的 iCloudHarbor
 专用目录调整属主，不要对已有的共享照片库盲目递归执行：
 
@@ -351,7 +363,7 @@ docker compose exec icloudharbor icloudharbor libraries list
 docker compose exec icloudharbor icloudharbor albums list --library root
 docker compose exec icloudharbor icloudharbor sync status
 
-# 生成同步计划，但不下载、不提交游标
+# 生成同步计划，但不下载、不删除本地文件、不提交游标
 docker compose exec icloudharbor icloudharbor sync plan
 
 # 手动同步一次
@@ -369,8 +381,9 @@ docker compose logs -f icloudharbor
 ```
 
 `config show` 会显示生效后的完整 Apple Account，请勿把未经脱敏的输出贴到公开 Issue。
-`sync plan` 不下载或替换照片文件，但仍会访问 Apple，并在 SQLite 中记录本次运行、图库状态
-以及已认领的本地文件；它不是完全无副作用的离线命令。
+`sync plan` 不下载、替换或删除照片文件；开启 `IH_AUTO_DELETE` 时会列出本地删除候选项。它仍会
+访问 Apple，并在 SQLite 中记录本次运行、图库状态以及已认领的本地文件，因此不是完全无副作用
+的离线命令。
 
 `0.3.5` 起，照片、视频、Live Photo、RAW 和转换生成的 JPEG 都会保留 iCloud 拍摄时间作为
 文件修改时间。升级前已经下载的文件可执行下面的强制全量扫描批量校正；校验完整的文件不会
@@ -391,8 +404,9 @@ docker compose exec icloudharbor icloudharbor sync run --full-scan
 
 下载成功后不重复输出完成消息；只有重试或失败时才会增加简短警告。日志不会输出资源 ID
 或签名下载链接。
-容器启动日志会明确显示当前是单向备份安全模式：程序不会删除 iCloud 或本地照片。同步
-计划中的已存在文件只显示跳过总数，避免全量扫描时产生海量日志。
+容器启动日志会明确显示 iCloud“最近删除”同步是否开启；程序始终不会删除 iCloud 内容。默认
+不会清理本地照片，只有开启 `IH_AUTO_DELETE` 后才执行已校验的精确本地删除。同步计划中的已
+存在文件只显示跳过总数，避免全量扫描时产生海量日志。
 
 所有 Docker 参数、取值、默认值、YAML 高级配置和完整命令说明见
 [`CONFIGURATION.md`](CONFIGURATION.md)。
@@ -527,6 +541,8 @@ docker compose exec icloudharbor icloudharbor sync run
 - 不要通过环境变量、Compose `command` 或 shell 历史传递 Apple 密码和验证码。
 - `.env` 应限制为仅管理员可读；Docker 管理员仍可查看其中的环境变量。
 - 只从可信源码构建镜像，并限制配置目录的宿主机访问权限。
+- 开启 `IH_AUTO_DELETE` 前备份 `/config` 与照片目录，并先用 `sync plan` 核对候选项；人工修改、
+  符号链接、同路径归属冲突和未被数据库跟踪的文件会被安全拒绝。
 - Webhook 可使用 HMAC-SHA256 签名；通知令牌应放在权限受限的文件中。
 - 发现安全问题时，请使用
   [GitHub Security Advisory](https://github.com/lwx-cloud/icloudHarbor/security/advisories/new)

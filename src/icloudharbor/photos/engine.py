@@ -12,6 +12,7 @@ import structlog
 from icloudharbor.config.models import MOUNTED_MARKER, AccountConfig
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.database.session import Database
+from icloudharbor.download.deletion import LocalDeletionManager, LocalDeletionReport
 from icloudharbor.download.manager import DownloadManager
 from icloudharbor.photos.planner import AssetPlanner, SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
@@ -44,6 +45,9 @@ class SyncExecution:
     plan: SyncPlan
     error_code: str | None = None
     message: str | None = None
+    deleted_count: int = 0
+    delete_failed_count: int = 0
+    bytes_deleted: int = 0
 
 
 class PhotosEngine:
@@ -56,6 +60,7 @@ class PhotosEngine:
         "PLAN",
         "DOWNLOAD",
         "VERIFY",
+        "LOCAL_DELETE",
         "COMMIT",
         "REPORT",
     )
@@ -123,8 +128,29 @@ class PhotosEngine:
                     cursor_updates.append((library.library_id, cursor, was_full))
                     discovered_assets.extend(assets)
 
+                deleted_assets: list[RemoteAsset] = []
+                deletion_warnings: list[str] = []
+                if account.sync.auto_delete:
+                    for library in selected:
+                        if library.library_id != "root":
+                            deletion_warnings.append(
+                                f"图库 {library.name} 暂不支持最近删除扫描，已跳过本地删除"
+                            )
+                            continue
+                        LOGGER.info("正在扫描 iCloud 最近删除")
+                        deleted_assets.extend(
+                            self.protocol.list_recently_deleted(library.library_id)
+                        )
+
                 limited_assets = self._limit_assets(account, discovered_assets)
                 plan = self.planner.build(limited_assets, account)
+                plan.warnings.extend(deletion_warnings)
+                self.planner.add_local_deletions(
+                    plan,
+                    deleted_assets,
+                    account,
+                    {(asset.library_id, asset.asset_id) for asset in discovered_assets},
+                )
 
                 self._event(
                     run_id,
@@ -134,14 +160,19 @@ class PhotosEngine:
                         "downloads": plan.download_count,
                         "skips": len(plan.skips),
                         "adoptions": len(plan.adoptions),
+                        "local_deletions": plan.local_delete_count,
                         "estimated_bytes": plan.estimated_bytes,
                     },
                 )
                 skip_note = f"（含 {len(plan.adoptions)} 个认领已有文件）" if plan.adoptions else ""
                 LOGGER.info(
                     f"扫描完成：项目={len(limited_assets)}；待下载={plan.download_count}；"
-                    f"已存在={len(plan.skips)}{skip_note}；预计数据={plan.estimated_bytes} 字节"
+                    f"已存在={len(plan.skips)}{skip_note}；"
+                    f"待删除本地文件={plan.local_delete_count}；"
+                    f"预计数据={plan.estimated_bytes} 字节"
                 )
+                for warning in plan.warnings:
+                    self._event(run_id, "PLAN_WARNING", warning, severity="WARNING")
                 self._check_plan_space(account, plan)
 
                 if dry_run:
@@ -171,8 +202,26 @@ class PhotosEngine:
                             asset_id=outcome.task.asset.asset_id,
                             payload={"error_code": outcome.error_code},
                         )
-                status = "COMPLETED" if report.failed_count == 0 else "PARTIAL"
-                if report.failed_count == 0:
+                deletion_report = LocalDeletionReport(0, 0, 0, ())
+                if report.failed_count == 0 and plan.local_deletions:
+                    self._event(run_id, "LOCAL_DELETE", "开始处理 iCloud 最近删除对应本地文件")
+                    deletion_report = LocalDeletionManager(
+                        self.repository,
+                        account,
+                    ).execute(plan.local_deletions)
+                    for deletion_outcome in deletion_report.outcomes:
+                        if not deletion_outcome.success:
+                            self._event(
+                                run_id,
+                                "LOCAL_DELETE_FAILED",
+                                deletion_outcome.message or "本地文件删除失败",
+                                severity="ERROR",
+                                asset_id=deletion_outcome.task.asset.asset_id,
+                                payload={"error_code": deletion_outcome.error_code},
+                            )
+                total_failed = report.failed_count + deletion_report.failed_count
+                status = "COMPLETED" if total_failed == 0 else "PARTIAL"
+                if total_failed == 0:
                     for library_id, cursor, was_full in cursor_updates:
                         self.repository.update_library_cursor(
                             account.id,
@@ -185,7 +234,7 @@ class PhotosEngine:
                     status=status,
                     downloaded_count=report.downloaded_count,
                     skipped_count=len(plan.skips),
-                    failed_count=report.failed_count,
+                    failed_count=total_failed,
                     bytes_downloaded=report.bytes_downloaded,
                 )
                 self._event(run_id, "REPORT", f"同步结束：{status}")
@@ -194,9 +243,12 @@ class PhotosEngine:
                     status,
                     report.downloaded_count,
                     len(plan.skips),
-                    report.failed_count,
+                    total_failed,
                     report.bytes_downloaded,
                     plan,
+                    deleted_count=deletion_report.deleted_count,
+                    delete_failed_count=deletion_report.failed_count,
+                    bytes_deleted=deletion_report.bytes_deleted,
                 )
         except Exception as exc:
             code = getattr(exc, "code", ErrorCode.UNKNOWN_PROTOCOL_ERROR)

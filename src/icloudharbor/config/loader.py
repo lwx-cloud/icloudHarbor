@@ -105,6 +105,7 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_FULL_SCAN_INTERVAL", ("sync", "full_scan_interval"), _identity),
     ("IH_RUN_ON_START", ("sync", "run_on_start"), _parse_bool),
     ("IH_DOWNLOAD_DELAY", ("sync", "download_delay"), _parse_int),
+    ("IH_AUTO_DELETE", ("sync", "auto_delete"), _parse_bool),
     ("IH_DOWNLOAD_CONCURRENCY", ("download", "concurrency"), _parse_int),
     ("IH_DOWNLOAD_TIMEOUT", ("download", "timeout"), _parse_int),
     ("IH_MAX_RETRIES", ("download", "max_retries"), _parse_int),
@@ -176,6 +177,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                     "full_scan_interval": "30d",
                     "schedule": "24h",
                     "run_on_start": True,
+                    "auto_delete": False,
                 },
             }
         ],
