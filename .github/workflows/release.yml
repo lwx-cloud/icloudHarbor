@@ -1,0 +1,176 @@
+name: release
+run-name: Release · ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish, for example v0.4.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: lwxcloud/icloudharbor
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - name: Validate tag and source versions
+        id: release
+        env:
+          EXPECTED_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["EXPECTED_TAG"]
+          tag_pattern = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
+          if tag_pattern.fullmatch(tag) is None:
+              raise SystemExit(f"release tag must use vX.Y.Z: {tag!r}")
+
+          repository_tags = subprocess.run(
+              ["git", "tag", "--list"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.splitlines()
+          stable_tags = [candidate for candidate in repository_tags if tag_pattern.fullmatch(candidate)]
+          newest_tag = max(
+              stable_tags,
+              key=lambda candidate: tuple(map(int, candidate.removeprefix("v").split("."))),
+          )
+          if tag != newest_tag:
+              raise SystemExit(f"refusing to move latest backwards: requested={tag}, newest={newest_tag}")
+
+          with Path("pyproject.toml").open("rb") as handle:
+              project_version = tomllib.load(handle)["project"]["version"]
+
+          init_text = Path("src/icloudharbor/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']$', init_text, re.MULTILINE)
+          if match is None:
+              raise SystemExit("cannot read __version__ from src/icloudharbor/__init__.py")
+
+          source_version = match.group(1)
+          expected_version = tag.removeprefix("v")
+          if project_version != expected_version or source_version != expected_version:
+              raise SystemExit(
+                  "release version mismatch: "
+                  f"tag={expected_version}, pyproject={project_version}, source={source_version}"
+              )
+          PY
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Require release commit on main
+        run: |
+          git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD
+
+  test:
+    name: Python ${{ matrix.python-version }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
+      - name: Validate Docker installer
+        run: |
+          bash -n deploy/install.sh
+          bash deploy/install.sh --help >/dev/null
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/icloudharbor
+      - name: Run local test suite when present
+        if: hashFiles('tests/**/*.py') != ''
+        run: uv run pytest --cov=icloudharbor --cov-report=term-missing
+
+  publish:
+    name: Publish Docker image
+    needs:
+      - validate
+      - test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - run: docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: lwxcloud
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Verify published tags and platforms
+        env:
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          version_manifest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${RELEASE_VERSION}")"
+          latest_manifest="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest")"
+          printf '%s\n' "$version_manifest"
+          printf '%s\n' "$version_manifest" | grep -Eq 'Platform:[[:space:]]+linux/amd64'
+          printf '%s\n' "$version_manifest" | grep -Eq 'Platform:[[:space:]]+linux/arm64'
+          version_digest="$(printf '%s\n' "$version_manifest" | sed -n 's/^Digest:[[:space:]]*//p')"
+          latest_digest="$(printf '%s\n' "$latest_manifest" | sed -n 's/^Digest:[[:space:]]*//p')"
+          test "$version_digest" = "$EXPECTED_DIGEST"
+          test "$latest_digest" = "$EXPECTED_DIGEST"

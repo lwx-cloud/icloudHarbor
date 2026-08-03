@@ -166,8 +166,12 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
   参数，不包含 Apple 密码。
 - `pyproject.toml`、`uv.lock`：固定的 Python 依赖和开发工具版本。
-- `.github/workflows/ci.yml`：Python 3.12/3.13 静态检查、本地测试存在时的测试、
-  amd64/arm64 镜像构建，以及版本标签触发的 Docker Hub 发布。
+- `.github/workflows/ci.yml`：`main` 推送与面向 `main` 的 PR 验证，包括 Python 3.12/3.13
+  静态检查、本地测试存在时的测试、Compose 校验和不推送的 amd64 镜像试构建；同一分支的旧
+  任务会在新提交到达后取消。
+- `.github/workflows/release.yml`：`vX.Y.Z` 标签与手动重试触发的正式发布；校验标签格式、源码
+  版本、最高稳定版本和提交归属后，构建并推送 amd64/arm64 镜像，最后复核完整版本号、
+  `latest` 和双架构清单。
 - `tests/`：仅在维护者本机保留的单元和集成测试，不连接真实 Apple 服务；目录被
   `.gitignore` 排除，不上传到 GitHub。
 
@@ -385,6 +389,11 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-03 的 0.4.0 发布：把最近删除本地同步作为 0.4 系列正式版本发布，统一源码、示例配置、
   README 和锁文件版本；`v0.4.0` 标签触发 amd64/arm64 镜像构建并更新 Docker Hub 的完整版本号
   与 `latest` 标签。
+- 2026-08-03 的发布自动化分层：普通 CI 只响应 `main` 推送和面向 `main` 的 PR，运行代码门禁、
+  Compose 校验及不推送的 amd64 镜像试构建；正式发布移入独立 `release.yml`，只接受合法
+  `vX.Y.Z` 标签或指定既有标签的手动重试，要求标签版本与源码一致、提交属于 `main`，成功推送
+  完整版本号和 `latest` 后再验证 Docker Hub 摘要与 amd64/arm64 清单；旧标签会被拒绝，避免
+  手动重试或误推历史标签时把 `latest` 回退。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -393,9 +402,16 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 
 ## 9. 发布规则
 
-- `.github/workflows/ci.yml` 会在每次 push 和 PR 上执行静态检查及构建；checkout 中存在
-  `tests/` 时才运行 pytest。只有 Git ref 以 `refs/tags/v` 开头时才登录并推送 Docker Hub。
-  普通 `git push` 不发布镜像。
+- `.github/workflows/ci.yml` 只在 `main` 推送和面向 `main` 的 PR 上执行门禁；checkout 中存在
+  `tests/` 时才运行 pytest，并只试构建不推送的 amd64 镜像。普通 `git push` 不发布镜像，也不
+  更新 `latest`；同一分支被新提交取代的旧 CI 会自动取消。
+- `.github/workflows/release.yml` 只在 `vX.Y.Z` 标签推送或手动指定既有版本标签时运行。发布前
+  必须确认标签是稳定 SemVer、`pyproject.toml` 与 `src/icloudharbor/__init__.py` 版本一致，且
+  它是仓库最高稳定版本、标签提交属于 `main`；通过 Python 3.12/3.13 门禁和 Compose 校验后才
+  登录 Docker Hub。历史标签即使被重新推送也会失败关闭，不能覆盖较新的 `latest`。
+- 发布任务只推送完整版本号和 `latest`，然后读取 registry 清单，确认两个标签指向本次构建摘要，
+  且镜像包含 `linux/amd64` 与 `linux/arm64`。手动触发只用于重试当前最高的既有版本标签，不从
+  任意分支、未打标签的提交或历史版本发布。
 - `latest` 只是可变标签。`docker compose up -d` 不负责查询远端更新，群晖下载新镜像后也不会
   自动替换已经运行的旧容器。升级必须依次执行 `docker compose pull` 和
   `docker compose up -d --force-recreate --remove-orphans`，再以容器内
@@ -406,7 +422,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   registry mirror 或代理缓存。
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
-- 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
+- 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
   `git push origin v0.4.0`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
