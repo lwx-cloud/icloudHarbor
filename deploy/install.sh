@@ -246,7 +246,7 @@ check_prerequisites() {
             ;;
     esac
 
-    for command_name in cat chmod chown cp curl docker find grep id mkdir mktemp mv readlink rm sleep tr uname wc; do
+    for command_name in cat chmod chown cp curl docker grep id mkdir mktemp mv readlink rm sleep tr uname wc; do
         command -v "$command_name" > /dev/null 2>&1 || missing+=("$command_name")
     done
     if [[ "${#missing[@]}" -gt 0 ]]; then
@@ -319,6 +319,7 @@ write_dotenv_assignment() {
 }
 
 write_new_environment() {
+    local include_defaults="${1:-false}"
     local index
 
     write_installer_marker
@@ -327,6 +328,7 @@ write_new_environment() {
     chmod 0600 "$STAGED_ENV"
     cat > "$STAGED_ENV" <<EOF
 # 由 iCloudHarbor 一键安装器生成。Apple 密码和验证码不得写入本文件。
+COMPOSE_FILE="docker-compose.yml"
 IH_APPLE_ID="$APPLE_ID"
 IH_CONTAINER_NAME="$CONTAINER_NAME"
 IH_CONFIG_PATH="$CONFIG_PATH"
@@ -338,6 +340,15 @@ IH_REGION="$REGION"
 IH_SYNC_INTERVAL="$SYNC_INTERVAL"
 IH_SYNOLOGY_PHOTOS_APP_FIX="$SYNOLOGY_FIX"
 EOF
+    if [[ "$include_defaults" == "true" ]]; then
+        cat >> "$STAGED_ENV" <<'EOF'
+IH_RUN_ON_START="true"
+IH_AUTO_DELETE="false"
+IH_DOWNLOAD_VIDEOS="true"
+IH_DOWNLOAD_LIVE_PHOTOS="true"
+IH_CONVERT_HEIC_TO_JPEG="false"
+EOF
+    fi
     for ((index = 0; index < ${#RECOVERED_ENV_NAMES[@]}; index++)); do
         write_dotenv_assignment \
             "${RECOVERED_ENV_NAMES[index]}" \
@@ -582,21 +593,6 @@ load_managed_project() {
     PROJECT_NAME="${BASH_REMATCH[1]}"
 }
 
-is_recognized_install_directory() {
-    local candidate
-
-    for candidate in \
-        "$INSTALL_DIR/docker-compose.yml" \
-        "$INSTALL_DIR/compose.yml" \
-        "$INSTALL_DIR/compose.yaml"; do
-        if [[ -f "$candidate" && ! -L "$candidate" ]] && \
-            grep -Fq 'lwxcloud/icloudharbor' "$candidate"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
 load_container_environment() {
     local container_name="$1"
     local line
@@ -658,15 +654,9 @@ recover_optional_container_environment() {
 
 adopt_existing_container() {
     local requested_name="${IH_CONTAINER_NAME:-icloudharbor}"
-    local image
     local project_label
 
     docker container inspect "$requested_name" > /dev/null 2>&1 || return 1
-    image=$(docker container inspect --format '{{.Config.Image}}' "$requested_name")
-    case "$image" in
-        lwxcloud/icloudharbor:* | lwxcloud/icloudharbor@*) ;;
-        *) return 1 ;;
-    esac
 
     CONTAINER_NAME="$requested_name"
     load_container_environment "$requested_name"
@@ -754,13 +744,11 @@ main() {
         [[ -f "$env_path" && ! -L "$env_path" ]] || \
             die "安装器管理的 .env 必须是普通文件：$env_path"
         if ! load_managed_project; then
-            is_recognized_install_directory || \
-                die "目录中的 .env 不属于可识别的 iCloudHarbor 部署：$INSTALL_DIR"
             if ! adopt_existing_container; then
                 set_project_name "${IH_CONTAINER_NAME:-icloudharbor}"
             fi
             write_installer_marker
-            info "已接管手动创建的 iCloudHarbor 部署，原 .env 保持不变。"
+            info "检测到现有 .env，已保留原参数并补充安装器标记。"
         fi
         chown 0:0 "$INSTALL_DIR" "$env_path" "$marker_path"
         chmod 0755 "$INSTALL_DIR"
@@ -779,12 +767,6 @@ main() {
                 load_managed_project || die "安装器管理标记无效：$marker_path"
                 interrupted_install="true"
                 info "检测到上次中断的安装，将自动继续。"
-            elif [[ -d "$INSTALL_DIR" ]] && \
-                [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-                if is_recognized_install_directory; then
-                    die "识别到旧部署文件，但没有 .env 或可接管的 iCloudHarbor 容器；为避免切换到错误的数据目录，已停止。"
-                fi
-                die "安装目录包含无法识别的文件，已停止：$INSTALL_DIR"
             fi
             if ! has_tty && [[ -z "${IH_APPLE_ID:-}" ]]; then
                 die "无交互终端时必须通过 IH_APPLE_ID 提供 Apple Account。"
@@ -808,7 +790,7 @@ main() {
             printf '  同步间隔:      %s 小时\n\n' "$SYNC_INTERVAL"
 
             prepare_directories
-            write_new_environment
+            write_new_environment true
         fi
     fi
 

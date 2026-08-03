@@ -169,8 +169,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `docker-compose.build.yml`：开发者从当前源码进行本地镜像构建时使用的 Compose 覆盖文件。
 - `deploy/install.sh`：幂等 Docker 自动安装/更新器；首次生成 root 管理的 `.env`，默认把
   容器可写状态放在安装目录的 `data/config`。重跑必须保留所有现有配置和持久化数据，只更新
-  受管理的 Compose 文件与镜像；旧部署缺少 `.env` 时可从经过镜像、挂载和字段校验的现有
-  容器恢复公开参数。
+  受管理的 Compose 文件与镜像；安装目录非空不得成为阻断条件。旧部署缺少 `.env` 时优先从
+  经过挂载和字段校验的同名现有容器恢复受支持参数，否则直接生成带默认参数的新 `.env`。
 - `docker/entrypoint.sh`：权限初始化、配置引导和非 root 降权。
 - `docker/icloudharbor-cli.sh`：让 `docker exec` 与镜像健康检查自动使用运行 UID/GID。
 - `.env.example`：可直接照填的新手参数参考，包含整数小时同步、常用布尔开关和可选企业微信
@@ -272,9 +272,11 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 安装器只可调整自己新建的专用目录，不得递归 `chown` 已有照片库或擅自修改 NAS ACL。
 - 检测到已有 `.env` 时，安装器不得覆盖账号、路径、通知密钥或任何持久化内容；只能更新
   Compose 文件、拉取镜像、重建容器并重新执行 `status`。
-- 已有安装目录缺少 `.env` 时，只能接管镜像属于 iCloudHarbor 且 `/config`、`/photos` 挂载和
-  必需环境参数全部通过校验的现有容器；重建 `.env` 时只复制公开支持的项目参数，必须保留
-  通知、自动清理等设置，不得复制系统环境或在终端输出 Secret。无法确认归属时必须停止。
+- 已有安装目录缺少 `.env` 时不得因目录非空或无法识别旧 Compose 而停止；必须保留其他文件，
+  直接补齐默认 `.env` 和受管理部署文件；生成的 `.env` 必须通过 `COMPOSE_FILE` 固定受管理的
+  Compose 文件，避免旧名称文件影响后续命令。同名现有容器存在时优先从其 `/config`、
+  `/photos` 挂载和受支持环境参数恢复配置，不限制本地或发布镜像名称；不得复制系统环境或在
+  终端输出 Secret。只有管理文件类型冲突、危险路径、同名容器必要挂载无效等情况才可停止。
 - 保存的密码使用 AES-256-GCM，但密钥和密文都在 `/config/credentials`，宿主机 root
   仍可恢复密码；此设计用于无人值守续期和防止意外明文泄露，不等同于硬件密钥保护。
 - Apple Cookie/Session、SQLite、通知密钥、加密密钥和凭据都属于敏感数据；整个 `/config`
