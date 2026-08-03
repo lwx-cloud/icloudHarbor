@@ -278,8 +278,9 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 以 root 运行且成功识别宿主机用户时，安装器把新建的 `config/`、`.env` 和
   `docker-compose.yaml` 交给该用户；容器入口只调整 `/config` 根目录与应用管理的子目录，
   不得为模仿 icloudpd 而递归接管整个已有照片库或修改 NAS ACL。
-- 安装器生成的 `config/` 固定为 `0777`，`.env` 和 `docker-compose.yaml` 固定为 `0666`；即使
-  无法从 root 会话识别真实用户，本机普通用户也必须能直接打开和修改这三个部署项目。
+- 安装器把执行命令时的部署目录和生成的 `config/` 固定为 `0777`，`.env` 与
+  `docker-compose.yaml` 固定为 `0666`；即使无法从 root 会话识别真实用户，本机普通用户也
+  必须能直接打开、修改、重命名或删除这些部署项目。
 - 安装器覆盖 `.env` 和 `docker-compose.yaml`，并清理旧安装器生成的 `.env.example`、
   `docker-compose.yml` 与 `.icloudharbor-installer`；它不拉取镜像、不启动或重建容器、不执行
   `status` 或 `setup`，也不用于升级已有部署。

@@ -32,7 +32,7 @@ failed() {
 trap failed ERR
 
 mkdir -p -- "$CONFIG_DIR"
-chmod 0777 "$CONFIG_DIR"
+chmod 0777 "$INSTALL_DIR" "$CONFIG_DIR"
 rm -f -- \
     "$INSTALL_DIR/.env.example" \
     "$INSTALL_DIR/.icloudharbor-installer" \
