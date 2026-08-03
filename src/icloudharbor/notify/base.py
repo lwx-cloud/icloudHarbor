@@ -41,6 +41,13 @@ class NotificationEvent:
     title: str
     message: str
     payload: dict[str, object] | None = None
+    details: str | None = None
+
+    @property
+    def detailed_message(self) -> str:
+        if not self.details:
+            return self.message
+        return f"{self.message}\n\n{self.details}"
 
 
 @dataclass(slots=True, frozen=True)
@@ -127,7 +134,7 @@ class NotifierHub:
             raise ValueError("Bark 缺少 device_key_file")
         server = str(channel.server or "https://api.day.app").rstrip("/")
         key = read_secret(channel.device_key_file)
-        payload = {"body": event.message, "group": "iCloudHarbor"}
+        payload = {"body": event.detailed_message, "group": "iCloudHarbor"}
         if silent:
             payload["level"] = "passive"
         return client.post(
@@ -146,7 +153,7 @@ class NotifierHub:
         key = read_secret(channel.send_key_file)
         return client.post(
             f"https://sctapi.ftqq.com/{quote(key, safe='')}.send",
-            data={"title": event.title, "desp": event.message},
+            data={"title": event.title, "desp": event.detailed_message},
         )
 
     @staticmethod
@@ -163,7 +170,7 @@ class NotifierHub:
             f"https://api.telegram.org/bot{quote(token, safe='')}/sendMessage",
             json={
                 "chat_id": channel.chat_id,
-                "text": f"{event.title}\n\n{event.message}",
+                "text": f"{event.title}\n\n{event.detailed_message}",
                 "disable_notification": silent,
             },
         )
@@ -194,7 +201,7 @@ class NotifierHub:
         if token_payload.get("errcode", 0) != 0 or not isinstance(access_token, str):
             raise ValueError("企业微信 access token 获取失败")
 
-        content = f"{event.title}\n\n{event.message}"
+        content = f"{event.title}\n\n{event.detailed_message}"
         if channel.name:
             content = f"{channel.name}\n{content}"
         message: dict[str, object] = {
@@ -277,6 +284,8 @@ class NotifierHub:
             "timestamp": int(time.time()),
             "silent": silent,
         }
+        if event.details:
+            payload["details"] = event.details
         headers: dict[str, str] = {}
         if channel.secret_file:
             secret = read_secret(Path(channel.secret_file)).encode()

@@ -48,6 +48,7 @@ class SyncExecution:
     deleted_count: int = 0
     delete_failed_count: int = 0
     bytes_deleted: int = 0
+    deleted_files: tuple[str, ...] = ()
 
 
 class PhotosEngine:
@@ -249,6 +250,7 @@ class PhotosEngine:
                     deleted_count=deletion_report.deleted_count,
                     delete_failed_count=deletion_report.failed_count,
                     bytes_deleted=deletion_report.bytes_deleted,
+                    deleted_files=deletion_report.deleted_files,
                 )
         except Exception as exc:
             code = getattr(exc, "code", ErrorCode.UNKNOWN_PROTOCOL_ERROR)

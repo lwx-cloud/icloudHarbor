@@ -25,6 +25,7 @@ class LocalDeletionOutcome:
     bytes_deleted: int = 0
     error_code: str | None = None
     message: str | None = None
+    deleted_files: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -33,6 +34,7 @@ class LocalDeletionReport:
     failed_count: int
     bytes_deleted: int
     outcomes: tuple[LocalDeletionOutcome, ...]
+    deleted_files: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -60,6 +62,9 @@ class LocalDeletionManager:
             failed_count=sum(not outcome.success for outcome in outcomes),
             bytes_deleted=sum(outcome.bytes_deleted for outcome in outcomes),
             outcomes=outcomes,
+            deleted_files=tuple(
+                filename for outcome in outcomes for filename in outcome.deleted_files
+            ),
         )
 
     def _delete_asset(self, task: LocalDeletionTask) -> LocalDeletionOutcome:
@@ -88,6 +93,7 @@ class LocalDeletionManager:
 
         deleted_count = 0
         bytes_deleted = 0
+        deleted_files: list[str] = []
         errors: list[str] = []
         for entry in entries:
             try:
@@ -95,6 +101,7 @@ class LocalDeletionManager:
                     entry.path.unlink()
                     deleted_count += 1
                     bytes_deleted += entry.size
+                    deleted_files.append(entry.path.name)
                     LOGGER.info(f"已删除本地文件：{display_host_path(entry.path)}")
                 self._set_status(entry, "DELETED_REMOTE")
                 if entry.row_type == "local_file":
@@ -111,8 +118,15 @@ class LocalDeletionManager:
                 bytes_deleted,
                 ErrorCode.FILE_PERMISSION_ERROR.value,
                 "；".join(errors),
+                tuple(deleted_files),
             )
-        return LocalDeletionOutcome(task, True, deleted_count, bytes_deleted)
+        return LocalDeletionOutcome(
+            task,
+            True,
+            deleted_count,
+            bytes_deleted,
+            deleted_files=tuple(deleted_files),
+        )
 
     def _preflight(
         self,

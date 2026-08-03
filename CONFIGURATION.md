@@ -209,7 +209,10 @@ docker compose exec -e IH_AUTO_DELETE=true icloudharbor icloudharbor sync plan
 后续调度都不会重复提醒；`setup` 或 `session renew` 成功后会发送认证恢复消息，说明后台同步
 请求已提交，并重新允许未来新的认证问题触发提醒。关闭 `auth_required` 但开启 `startup` 时，
 合并消息仍作为普通启动消息发送；两个开关都关闭时不发送。同步成功但没有新文件时标题为
-“已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。
+“已是最新”；有下载时显示文件数和易读的数据量，不展示内部状态码。开启本地清理且实际删除
+文件后，通知摘要继续显示数量和释放空间，展开详情可查看成功删除的文件名。Bark、Server酱、
+Telegram 和企业微信正文最多列出 50 个文件名，超出部分提示查看容器日志；Webhook 的
+`message` 保持摘要，`details` 提供同样的可读详情，`data.deleted_files` 携带完整文件名列表。
 
 注意事项：
 

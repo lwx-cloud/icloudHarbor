@@ -53,6 +53,8 @@ AUTH_REQUIRED_ERROR_CODES = {
     "WEB_ACCESS_DISABLED",
     "ADP_APPROVAL_REQUIRED",
 }
+MAX_NOTIFICATION_CLEANUP_FILES = 50
+MAX_NOTIFICATION_CLEANUP_DETAILS_CHARS = 2000
 
 
 class HarborApplication:
@@ -383,16 +385,50 @@ class HarborApplication:
                 )
             )
 
+        payload: dict[str, object] = {
+            "run_id": result.run_id,
+            "error_code": result.error_code,
+        }
+        if result.deleted_files:
+            payload["deleted_files"] = list(result.deleted_files)
         event = NotificationEvent(
             event_type,
             f"{self.config.notifications.title} {title_suffix}",
             "\n".join(lines),
-            {"run_id": result.run_id, "error_code": result.error_code},
+            payload,
+            self._cleanup_notification_details(result.deleted_files),
         )
         if event_type == NotificationType.AUTH_REQUIRED:
             self.notify_auth_required(account, event)
             return
         self.notifier.send(event)
+
+    @staticmethod
+    def _cleanup_notification_details(filenames: tuple[str, ...]) -> str | None:
+        if not filenames:
+            return None
+        safe_names = tuple(
+            " ".join(filename.replace("\t", " ").splitlines()).strip() or "（未命名文件）"
+            for filename in filenames
+        )
+        shown: list[str] = []
+        used_chars = 0
+        for filename in safe_names:
+            line = f"- {filename}"
+            if len(shown) >= MAX_NOTIFICATION_CLEANUP_FILES:
+                break
+            if shown and used_chars + len(line) + 1 > MAX_NOTIFICATION_CLEANUP_DETAILS_CHARS:
+                break
+            shown.append(line)
+            used_chars += len(line) + 1
+        omitted = len(safe_names) - len(shown)
+        heading = "清理文件明细："
+        if omitted:
+            heading = f"清理文件明细（显示 {len(shown)}/{len(safe_names)}）："
+        details = [heading, *shown]
+        if omitted:
+            details.append(f"- 其余 {omitted} 个文件请查看容器日志")
+        return "\n".join(details)
 
     @staticmethod
     def _format_data_size(size: int) -> str:

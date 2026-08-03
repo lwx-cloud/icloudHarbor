@@ -11,7 +11,7 @@ Docker 镜像发布为 `lwxcloud/icloudharbor`，支持 `linux/amd64` 和 `linux
 项目没有 Web 界面，不开放业务端口。Docker 参数负责部署和日常配置，认证、检查与手动同步
 通过容器内的 `icloudharbor` 命令完成。
 
-> 本文档对应源码版本 `0.4.1`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
+> 本文档对应源码版本 `0.4.2`。项目已经完成真实双重认证与下载验证，但 Apple 私有接口可能
 > 随时变化；请保留其他可靠备份。
 
 [快速开始](#快速开始) · [群晖部署](#群晖部署示例) · [认证续期](#认证续期与密码) ·
@@ -406,7 +406,9 @@ docker compose exec icloudharbor icloudharbor sync run --full-scan
 或签名下载链接。
 容器启动日志会明确显示 iCloud“最近删除”同步是否开启；程序始终不会删除 iCloud 内容。默认
 不会清理本地照片，只有开启 `IH_AUTO_DELETE` 后才执行已校验的精确本地删除。同步计划中的已
-存在文件只显示跳过总数，避免全量扫描时产生海量日志。
+存在文件只显示跳过总数，避免全量扫描时产生海量日志。发生实际清理时，同步结果通知的详情
+会列出成功删除的文件名；通知正文最多显示 50 个，更多文件会提示查看容器日志，Webhook 的
+`data.deleted_files` 保留本轮完整列表。
 
 所有 Docker 参数、取值、默认值、YAML 高级配置和完整命令说明见
 [`CONFIGURATION.md`](CONFIGURATION.md)。
