@@ -29,7 +29,6 @@ def startup_summary(
     )
     destination = display_host_path(account.destination.path)
     region = {
-        "auto": "自动识别",
         "global": "全球（icloud.com）",
         "china": "中国大陆（icloud.com.cn）",
     }[account.region]

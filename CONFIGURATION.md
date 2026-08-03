@@ -26,7 +26,7 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_PUID` | `1000` | 容器进程和新文件使用的宿主机 UID，必须大于 0。 |
 | `IH_PGID` | `1000` | 容器进程和新文件使用的宿主机 GID，必须大于 0。 |
 | `IH_TIMEZONE` | `UTC` | IANA 时区；中国常用 `Asia/Shanghai`。 |
-| `IH_REGION` | `auto` | `auto`、`global` 或 `china`。 |
+| `IH_REGION` | `global` | 必须显式选择 `global` 或 `china`；不再支持 `auto`。 |
 
 群晖运行 `id <管理员用户名>` 查询实际 UID/GID。容器会把 `/config` 和应用管理的子目录
 交给这组 ID，但不会递归修改已有照片库或 NAS ACL。
@@ -264,7 +264,7 @@ accounts:
   - id: your-account@example.com
     name: 家庭相册
     apple_id: your-account@example.com
-    region: auto
+    region: global
     enabled: true
     libraries: [root]
 
@@ -378,11 +378,15 @@ IH_PHOTOS_PATH=/volume2/photos/iCloud
 IH_PUID=1026
 IH_PGID=100
 IH_TIMEZONE=Asia/Shanghai
-IH_REGION=auto
+IH_REGION=global
 IH_SYNC_INTERVAL=12
 ```
 
 `1026:100` 只是示例，必须用 `id <管理员用户名>` 的实际结果。
+
+`IH_REGION` 必须按 Apple Account 的 iCloud 数据区域显式设置：全球服务端点使用 `global`
+（`icloud.com`），中国大陆云上贵州服务端点使用 `china`（`icloud.com.cn`）。0.5.2 起不再接受
+`auto`；升级前必须修改已有 `.env` 或高级 YAML，否则配置会失败关闭。
 
 ### 首次只下载最近 100 项
 

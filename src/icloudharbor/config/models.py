@@ -187,7 +187,7 @@ class AccountConfig(StrictModel):
     id: str = Field(min_length=1, max_length=ACCOUNT_ID_MAX_BYTES)
     name: str
     apple_id: str
-    region: Literal["auto", "global", "china"] = "auto"
+    region: Literal["global", "china"] = "global"
     enabled: bool = True
     libraries: list[str] = Field(default_factory=lambda: ["root"])
     destination: DestinationConfig

@@ -230,7 +230,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                 "id": apple_id,
                 "name": apple_id,
                 "apple_id": apple_id,
-                "region": "auto",
+                "region": "global",
                 "enabled": True,
                 "libraries": ["root"],
                 "destination": {

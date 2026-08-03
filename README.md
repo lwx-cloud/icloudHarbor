@@ -7,7 +7,7 @@ iCloudHarbor 是面向 Linux 和 NAS 的 iCloud Photos Docker 备份工具。它
 Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文件校验、拍摄时间恢复以及
 安全的本地清理。
 
-> 当前源码版本：`0.5.1`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
+> 当前源码版本：`0.5.2`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
 
 [快速开始](#快速开始) · [通知](#通知) · [常用命令](#常用命令) ·
 [完整参数](CONFIGURATION.md) · [更新](#更新)
@@ -58,7 +58,7 @@ IH_PHOTOS_PATH=/volume2/photos/iCloud
 IH_PUID=1026
 IH_PGID=100
 IH_TIMEZONE=Asia/Shanghai
-IH_REGION=auto
+IH_REGION=global
 IH_SYNC_INTERVAL=12
 IH_RUN_ON_START=true
 IH_PHOTO_SIZE=original
@@ -70,6 +70,9 @@ IH_NOTIFY=false
 宿主机用户。
 
 `IH_SYNC_INTERVAL` 只填写 `6`、`12` 或 `24`，数字代表小时，不要填写 `6h`。
+
+`IH_REGION` 必须明确填写：普通全球账号使用 `global`；iCloud 数据由云上贵州运营的中国大陆
+账号使用 `china`。`auto` 已不再支持，避免首次认证时选择错误端点。
 
 ### 3. 准备照片目录
 

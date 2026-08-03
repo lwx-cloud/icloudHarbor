@@ -8,7 +8,6 @@ iCloudHarbor models.
 from __future__ import annotations
 
 import io
-import json
 import mimetypes
 import secrets
 from dataclasses import replace
@@ -577,19 +576,12 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             # Windows ACLs do not implement POSIX chmod semantics.
             pass
 
-    def _resolve_china_mainland(self, region: str) -> bool | None:
+    def _resolve_china_mainland(self, region: str) -> bool:
         if region == "global":
             return False
         if region == "china":
             return True
-        for path in self.session_directory.glob("*.session"):
-            try:
-                country = json.loads(path.read_text(encoding="utf-8")).get("account_country")
-            except (OSError, ValueError, TypeError):
-                continue
-            if country:
-                return str(country).upper() == "CHN"
-        return None
+        raise ValueError("iCloud 区域必须显式设置为 global 或 china")
 
     @staticmethod
     def _requires_two_factor(api: Any, delivery_method: str | None = None) -> bool:

@@ -29,7 +29,7 @@ class AuthStatus(StrEnum):
 class Credentials:
     apple_id: str
     password: str | None
-    region: str = "auto"
+    region: str = "global"
 
 
 @dataclass(slots=True, frozen=True)
