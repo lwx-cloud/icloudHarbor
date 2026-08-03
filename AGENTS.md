@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.3.11`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.4.0`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -382,6 +382,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   并按账号、图库和 Asset ID 精确匹配已记录文件；删除前复核受管路径、归属、普通文件类型、
   大小与 SHA-256，拒绝同名猜测、符号链接、人工修改和多 Asset 路径冲突；`sync plan` 可安全预览，
   照片恢复到普通图库后会重新下载，始终不调用 iCloud 远端删除接口。
+- 2026-08-03 的 0.4.0 发布：把最近删除本地同步作为 0.4 系列正式版本发布，统一源码、示例配置、
+  README 和锁文件版本；`v0.4.0` 标签触发 amd64/arm64 镜像构建并更新 Docker Hub 的完整版本号
+  与 `latest` 标签。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -404,7 +407,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.3.11`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.4.0`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。
