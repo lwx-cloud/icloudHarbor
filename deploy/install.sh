@@ -32,6 +32,7 @@ failed() {
 trap failed ERR
 
 mkdir -p -- "$CONFIG_DIR"
+chmod 0777 "$CONFIG_DIR"
 rm -f -- \
     "$INSTALL_DIR/.env.example" \
     "$INSTALL_DIR/.icloudharbor-installer" \
@@ -55,12 +56,12 @@ IH_RUN_ON_START="true"
 IH_PHOTO_SIZE="original"
 IH_NOTIFY="false"
 EOF
-chmod 0600 "$ENV_FILE"
+chmod 0666 "$ENV_FILE"
 
 curl --fail --silent --location \
     "$RAW_COMPOSE_URL" \
     --output "$COMPOSE_FILE"
-chmod 0644 "$COMPOSE_FILE"
+chmod 0666 "$COMPOSE_FILE"
 
 if [[ "$(id -u)" == "0" ]] && [[ "$ENV_PUID" =~ ^[1-9][0-9]*$ ]]; then
     chown "$ENV_PUID:$ENV_PGID" "$CONFIG_DIR" "$ENV_FILE" "$COMPOSE_FILE"

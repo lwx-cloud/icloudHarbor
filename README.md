@@ -43,7 +43,9 @@ config/
 docker-compose.yaml
 ```
 
-它不会询问参数、创建照片目录、启动容器或执行认证，也不会生成 `.env.example`。
+它不会询问参数、创建照片目录、启动容器或执行认证，也不会生成 `.env.example`。即使用 root
+执行，生成的 `.env` 和 `docker-compose.yaml` 也允许本机普通用户直接读写，`config/` 允许
+进入和写入。
 
 ### 2. 编辑 `.env`
 
@@ -220,9 +222,9 @@ docker compose exec icloudharbor icloudharbor --version
 
 ### 管理员打不开或删不掉目录
 
-检查 `.env` 中的 `IH_PUID`、`IH_PGID` 是否与 `id <管理员用户名>` 一致。容器启动时
-会修正 `/config` 和应用子目录的属主，新下载文件也由该用户创建。它不会递归接管已有共享
-照片库；旧目录只应在确认归属后手工修复。
+一键脚本生成的 `.env`、`docker-compose.yaml` 权限为 `0666`，`config/` 为 `0777`，不受
+root 属主影响。容器启动后创建的应用子目录会按 `.env` 中的 `IH_PUID`、`IH_PGID` 管理；如果
+这些子目录打不开，请确认它们与 `id <管理员用户名>` 一致。程序不会递归接管已有共享照片库。
 
 ### `marker_missing`
 
