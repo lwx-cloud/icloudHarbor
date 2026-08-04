@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import mimetypes
 import secrets
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,8 @@ from icloudharbor.protocol.models import (
 )
 
 _REFRESHABLE_RESOURCE_STATUSES = frozenset({401, 403, 410})
+_DOWNLOAD_CONNECT_TIMEOUT = 10
+_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 class PyicloudProtocolAdapter(ICloudProtocol):
@@ -45,7 +48,7 @@ class PyicloudProtocolAdapter(ICloudProtocol):
         self,
         session_directory: Path,
         account_id: str = "default",
-        download_timeout: int = 300,
+        download_timeout: int = 30,
     ) -> None:
         self.session_directory = session_directory
         self.account_id = account_id
@@ -384,7 +387,7 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             response.raise_for_status()
             total = response.headers.get("Content-Length")
             return ResourceStream(
-                response.iter_content(chunk_size=1024 * 1024),
+                self._iter_response_chunks(api, response),
                 status_code=response.status_code,
                 total_size=int(total) if total and total.isdigit() else None,
                 supports_range=response.status_code == 206
@@ -403,12 +406,38 @@ class PyicloudProtocolAdapter(ICloudProtocol):
 
     def _request_download_url(self, api: Any, url: str, offset: int) -> Any:
         headers = {"Range": f"bytes={offset}-"} if offset else {}
-        return api.session.get(
-            url,
-            stream=True,
-            headers=headers,
-            timeout=self.download_timeout,
-        )
+        try:
+            return api.session.get(
+                url,
+                stream=True,
+                headers=headers,
+                timeout=(_DOWNLOAD_CONNECT_TIMEOUT, self.download_timeout),
+            )
+        except Exception:
+            self._discard_download_connections(api)
+            raise
+
+    def _iter_response_chunks(self, api: Any, response: Any) -> Iterator[bytes]:
+        try:
+            yield from response.iter_content(chunk_size=_DOWNLOAD_CHUNK_SIZE)
+        except Exception as exc:
+            # A broken or idle CDN response must not leave its pooled connection
+            # available for the next Range retry. Closing HTTP adapters clears
+            # idle pooled sockets without removing cookies or the Apple session.
+            self._discard_download_connections(api)
+            raise self._map_exception(exc) from exc
+
+    @staticmethod
+    def _discard_download_connections(api: Any) -> None:
+        session = getattr(api, "session", None)
+        adapters = getattr(session, "adapters", None)
+        values = getattr(adapters, "values", None)
+        if not callable(values):
+            return
+        for adapter in tuple(values()):
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                close()
 
     def _refresh_resource(
         self,
@@ -720,8 +749,17 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             return ProtocolError("高级数据保护账号需要临时批准", ErrorCode.ADP_APPROVAL_REQUIRED)
         if "login" in name or "authentication" in lower or "password" in lower:
             return ProtocolError("Apple Account 认证失败", ErrorCode.AUTH_ERROR)
-        if "timeout" in name or "timed out" in lower:
-            return ProtocolError("Apple 服务请求超时", ErrorCode.NETWORK_TIMEOUT)
+        if (
+            "timeout" in name
+            or "timed out" in lower
+            or "chunkedencoding" in name
+            or "incompleteread" in name
+            or "incompleteread" in lower
+            or "connection broken" in lower
+            or "connection aborted" in lower
+            or "remote end closed" in lower
+        ):
+            return ProtocolError("Apple 下载连接中断或读取超时", ErrorCode.NETWORK_TIMEOUT)
         status = PyicloudProtocolAdapter._response_status(exc)
         if status == 401:
             return ProtocolError("Apple Account 会话已失效", ErrorCode.AUTH_ERROR)

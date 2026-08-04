@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.5.3`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.5.4`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -444,6 +444,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   `china`，避免验证码正确但 Session 信任请求发送到错误端点。
 - 2026-08-04 的 0.5.3 下载地址恢复：Apple 临时资源地址返回 HTTP 410 时按 Asset ID 重新
   查询资源并使用新的签名地址下载；若最新地址仍返回 410，则停止重复请求并报告远端资源不可用。
+- 2026-08-04 的 0.5.4 下载连接恢复：默认读取空闲超时从 300 秒缩短为 30 秒；下载流发生
+  `IncompleteRead`、分块传输中断或读取超时时清空旧 HTTP 连接池，并在同轮重试中从 `.part`
+  文件的 Range 断点继续。单次重试只写日志，最终同步结果继续统一发送一次通知。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -473,7 +476,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.5.3`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.5.4`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

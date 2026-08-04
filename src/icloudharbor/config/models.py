@@ -179,7 +179,7 @@ class SyncConfig(StrictModel):
 
 class DownloadConfig(StrictModel):
     concurrency: Annotated[int, Field(ge=1, le=8)] = 1
-    timeout: Annotated[int, Field(ge=1, le=3600)] = 300
+    timeout: Annotated[int, Field(ge=1, le=3600)] = 30
     max_retries: Annotated[int, Field(ge=0, le=20)] = 5
 
 

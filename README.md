@@ -10,7 +10,7 @@ Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文�
 本项目参考了 [docker-icloudpd](https://github.com/boredazfcuk/docker-icloudpd) 的容器化备份
 思路，但为独立实现。
 
-> 当前源码版本：`0.5.3`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
+> 当前源码版本：`0.5.4`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
 
 [快速开始](#快速开始) · [通知](#通知) · [常用命令](#常用命令) ·
 [完整参数](CONFIGURATION.md) · [更新](#更新)
@@ -19,7 +19,7 @@ Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文�
 
 - 支持个人图库、共享图库和相册筛选；
 - 支持照片、视频、Live Photo、RAW/JPEG、原片与编辑版；
-- 使用 SQLite 保存状态，下载中断后可继续；
+- 使用 SQLite 保存状态；下载连接中断时丢弃旧连接，并从 `.part` 断点继续；
 - 下载完成后校验大小和 SHA-256，再原子写入正式文件；
 - Apple 临时下载地址返回 410 时自动重新获取最新地址；
 - 恢复 iCloud 拍摄时间，兼容 Synology Photos 索引；

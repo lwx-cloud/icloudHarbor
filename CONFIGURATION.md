@@ -90,8 +90,11 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_FILENAME_TEMPLATE` | `{original_name}` | 文件名模板。 |
 | `IH_CONFLICT_POLICY` | `suffix_asset_id` | `suffix_asset_id`、`always_asset_id`、`timestamp`、`error`。 |
 | `IH_DOWNLOAD_CONCURRENCY` | `1` | 并发下载数，范围 1–8。Apple 限流时保持 1。 |
-| `IH_DOWNLOAD_TIMEOUT` | `300` | 单次下载超时秒数。 |
+| `IH_DOWNLOAD_TIMEOUT` | `30` | 下载连接成功后，连续未收到数据的读取超时秒数；不是完整文件的总时长。 |
 | `IH_MAX_RETRIES` | `5` | 单个资源最大重试次数，范围 0–20。 |
+
+0.5.4 起新配置的下载读取超时默认为 30 秒。已有 `/config/config.yaml` 不会被自动改写；若其中
+仍是 `timeout: 300`，请改为 `timeout: 30`，或在 `.env` 增加 `IH_DOWNLOAD_TIMEOUT=30` 后重建容器。
 
 ### 日志和账号显示
 
@@ -313,7 +316,7 @@ accounts:
 
     download:
       concurrency: 1
-      timeout: 300
+      timeout: 30
       max_retries: 5
 
 notifications:
