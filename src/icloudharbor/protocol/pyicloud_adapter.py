@@ -35,6 +35,8 @@ from icloudharbor.protocol.models import (
     ResourceStream,
 )
 
+_REFRESHABLE_RESOURCE_STATUSES = frozenset({401, 403, 410})
+
 
 class PyicloudProtocolAdapter(ICloudProtocol):
     capability_version = "pyicloud-2.6.5/libraries-albums-cursor-reconcile"
@@ -353,10 +355,10 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                         offset,
                     )
                 except Exception as exc:
-                    if self._response_status(exc) not in {401, 403}:
+                    if self._response_status(exc) not in _REFRESHABLE_RESOURCE_STATUSES:
                         raise
                     response = self._refresh_resource(api, resource, offset)
-                if getattr(response, "status_code", None) in {401, 403}:
+                if getattr(response, "status_code", None) in _REFRESHABLE_RESOURCE_STATUSES:
                     close = getattr(response, "close", None)
                     if callable(close):
                         close()
@@ -377,6 +379,8 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                     "资源下载地址已失效，需要重新扫描",
                     ErrorCode.DOWNLOAD_URL_EXPIRED,
                 )
+            if getattr(response, "status_code", None) == 410:
+                raise ProtocolError("远端资源已不可用", ErrorCode.REMOTE_NOT_FOUND)
             response.raise_for_status()
             total = response.headers.get("Content-Length")
             return ResourceStream(
@@ -424,16 +428,31 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             try:
                 response = self._request_download_url(api, str(refreshed_url), offset)
             except Exception as exc:
-                if self._response_status(exc) in {401, 403}:
+                status = self._response_status(exc)
+                if status in {401, 403}:
                     raise ProtocolError(
                         "资源下载地址已失效，需要重新扫描",
                         ErrorCode.DOWNLOAD_URL_EXPIRED,
                     ) from exc
+                if status == 410:
+                    raise ProtocolError(
+                        "Apple 返回的最新资源地址仍不可用",
+                        ErrorCode.REMOTE_NOT_FOUND,
+                    ) from exc
                 raise
-            if getattr(response, "status_code", None) in {401, 403}:
+            status = getattr(response, "status_code", None)
+            if status in {401, 403}:
                 raise ProtocolError(
                     "资源下载地址已失效，需要重新扫描",
                     ErrorCode.DOWNLOAD_URL_EXPIRED,
+                )
+            if status == 410:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+                raise ProtocolError(
+                    "Apple 返回的最新资源地址仍不可用",
+                    ErrorCode.REMOTE_NOT_FOUND,
                 )
             return response
         return asset.download(resource.version)
@@ -712,7 +731,7 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             return ProtocolError("Apple 服务正在限流", ErrorCode.RATE_LIMITED)
         if status in {500, 502, 503, 504}:
             return ProtocolError("Apple 服务暂时不可用", ErrorCode.SERVICE_UNAVAILABLE)
-        if status == 404:
+        if status in {404, 410}:
             return ProtocolError("远端资源不存在", ErrorCode.REMOTE_NOT_FOUND)
         return ProtocolError(
             f"Apple 协议调用失败：{type(exc).__name__}；详情：{exc}",
