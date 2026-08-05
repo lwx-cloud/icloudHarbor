@@ -133,7 +133,7 @@ class DownloadManager:
                     f"完成下载：{brief}；"
                     f"耗时 {elapsed:.1f}s；"
                     f"大小 {size} 字节；"
-                    f"速率 {speed/1000:.0f}KB/s；"
+                    f"速率 {speed / 1000:.0f}KB/s；"
                     f"重试 {attempt} 次",
                 )
                 target = (self.destination / task.relative_path).resolve()
