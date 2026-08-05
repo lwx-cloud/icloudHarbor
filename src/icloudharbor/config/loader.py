@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
 from icloudharbor.config.models import AppConfig
 
@@ -194,22 +195,29 @@ def config_path_from_env(explicit: Path | None = None) -> Path:
 
 def load_config(path: Path | None = None) -> AppConfig:
     resolved = config_path_from_env(path)
-    if not resolved.is_file():
-        raise FileNotFoundError(f"配置文件不存在：{resolved}")
-    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("配置文件根节点必须是 YAML 对象")
-    data: dict[str, Any] = raw
+    data = _read_config_data(resolved)
     apply_environment_overrides(data)
     return AppConfig.model_validate(data)
 
 
 def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
-    """Create the initial persisted YAML from Docker parameters and defaults."""
+    """Create YAML initially and persist effective Docker overrides thereafter."""
 
     resolved = config_path_from_env(path)
     if resolved.is_file():
-        return load_config(resolved), False
+        existing_data = _read_config_data(resolved)
+        try:
+            persisted_config = AppConfig.model_validate(existing_data)
+        except ValidationError:
+            # An environment override may intentionally repair an invalid value
+            # left in an older YAML file. The effective configuration is still
+            # validated below before anything is replaced on disk.
+            persisted_config = None
+        apply_environment_overrides(existing_data)
+        config = AppConfig.model_validate(existing_data)
+        if config != persisted_config:
+            _write_config_atomic(resolved, config_snapshot(config))
+        return config, False
 
     _reject_unsupported_environment_variables()
 
@@ -250,7 +258,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
     }
     apply_environment_overrides(data)
     config = AppConfig.model_validate(data)
-    _write_new_config(resolved, config_snapshot(config))
+    _write_config_atomic(resolved, config_snapshot(config))
     return config, True
 
 
@@ -470,7 +478,16 @@ def _mapping(target: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def _write_new_config(path: Path, content: str) -> None:
+def _read_config_data(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"配置文件不存在：{path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件根节点必须是 YAML 对象")
+    return raw
+
+
+def _write_config_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     descriptor: int | None = None

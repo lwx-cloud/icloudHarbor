@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.5.4`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.5.5`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -53,7 +53,8 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
 - 中国大陆和全球 iCloud 服务端点；`region` 必须显式选择 `global` 或 `china`，不再自动猜测。
 - Apple 双重认证验证码。
-- Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`。
+- Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`；后续启动会校验已有 YAML，
+  并把非空环境变量的有效覆盖值原子同步写回，未覆盖的高级字段保持不变，通知 Secret 不落入 YAML。
 - `deploy/install.sh` 是无交互部署文件生成器：以执行命令时的当前目录为部署目录，只创建
   `config/`、默认 `.env` 和 `docker-compose.yaml`，不检查 Docker、不创建配置子目录或照片
   挂载标记，也不拉取镜像、启动容器、运行状态检查或认证。
@@ -135,7 +136,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
 2. 把 `/config` 根目录和应用管理的运行目录交给配置的非 root UID/GID，并收紧私有目录权限。
-3. 如果 `/config/config.yaml` 不存在，执行隐藏内部入口 `icloudharbor bootstrap`。
+3. 执行隐藏内部入口 `icloudharbor bootstrap`：配置不存在时生成，存在时校验并同步非空 `IH_*`
+   环境变量覆盖值。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
    最多运行一个认证或同步操作。
@@ -447,6 +449,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-04 的 0.5.4 下载连接恢复：默认读取空闲超时从 300 秒缩短为 30 秒；下载流发生
   `IncompleteRead`、分块传输中断或读取超时时清空旧 HTTP 连接池，并在同轮重试中从 `.part`
   文件的 Range 断点继续。单次重试只写日志，最终同步结果继续统一发送一次通知。
+- 2026-08-05 的 0.5.5 配置同步改进：容器每次启动都会运行 bootstrap，校验已有 `config.yaml`
+  并把非空 `IH_*` 环境变量的有效覆盖值原子同步写回；未覆盖的高级字段保持不变，通知 Secret
+  不落入 YAML。更新文档描述这一行为，并修正 `IH_DOWNLOAD_TIMEOUT` 等参数的生效方式说明。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -476,7 +481,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.5.4`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.5.5`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

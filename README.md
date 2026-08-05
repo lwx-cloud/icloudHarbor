@@ -10,7 +10,7 @@ Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文�
 本项目参考了 [docker-icloudpd](https://github.com/boredazfcuk/docker-icloudpd) 的容器化备份
 思路，但为独立实现。
 
-> 当前源码版本：`0.5.4`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
+> 当前源码版本：`0.5.5`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
 
 [快速开始](#快速开始) · [通知](#通知) · [常用命令](#常用命令) ·
 [完整参数](CONFIGURATION.md) · [更新](#更新)
@@ -116,6 +116,9 @@ docker compose exec icloudharbor icloudharbor setup
 ```
 
 启动前请修改 `.env` 中的账号、路径和 UID/GID。
+
+容器每次启动都会把 `.env` 中非空的 `IH_*` 配置同步到持久化的 `config/config.yaml`；修改后
+使用 `docker compose up -d --force-recreate` 重建容器即可。通知 Secret 不会写入 YAML。
 
 ## 通知
 

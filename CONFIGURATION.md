@@ -93,8 +93,8 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_DOWNLOAD_TIMEOUT` | `30` | 下载连接成功后，连续未收到数据的读取超时秒数；不是完整文件的总时长。 |
 | `IH_MAX_RETRIES` | `5` | 单个资源最大重试次数，范围 0–20。 |
 
-0.5.4 起新配置的下载读取超时默认为 30 秒。已有 `/config/config.yaml` 不会被自动改写；若其中
-仍是 `timeout: 300`，请改为 `timeout: 30`，或在 `.env` 增加 `IH_DOWNLOAD_TIMEOUT=30` 后重建容器。
+0.5.4 起新配置的下载读取超时默认为 30 秒。若已有配置仍是 `timeout: 300`，可在 `.env`
+增加 `IH_DOWNLOAD_TIMEOUT=30` 后重建容器；启动时会把这个非空环境变量同步写入 `config.yaml`。
 
 ### 日志和账号显示
 
@@ -248,8 +248,9 @@ notifications:
 
 ## 高级 `config.yaml`
 
-首次启动会自动生成 `/config/config.yaml`。已有文件不会被 bootstrap 覆盖；非空环境变量
-仍会在每次启动时覆盖对应字段。
+首次启动会自动生成 `/config/config.yaml`。以后每次容器启动都会校验已有文件，并把非空
+`IH_*` 环境变量对应的有效值原子同步写入 YAML；没有被环境变量覆盖的高级字段保持不变。
+通知 Secret 仍只写入 `/config/notification-keys/`，YAML 只保存密钥文件路径。
 
 下面是完整结构示例，未使用的可选字段可以删除：
 
@@ -421,7 +422,8 @@ IH_JPEG_QUALITY=95
 docker compose up -d --force-recreate
 ```
 
-删除某个环境变量后，旧值可能仍保存在 `config.yaml`，需要同时修改 YAML。
+启动日志出现“已同步非空 IH_* 参数”后，`config.yaml` 中对应值也会更新。删除某个环境变量后，
+已持久化的旧值仍会保留，需要同时修改 YAML；空字符串不会被当作覆盖值。
 
 ### 管理员打不开目录
 

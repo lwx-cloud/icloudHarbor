@@ -54,9 +54,7 @@ write_notification_secret "${IH_WECOM_CORP_SECRET:-}" /config/notification-keys/
 write_notification_secret "${IH_WEBHOOK_SECRET:-}" /config/notification-keys/webhook-secret
 
 IH_RUNTIME_CONFIG="${IH_CONFIG_FILE:-/config/config.yaml}"
-if [ ! -e "$IH_RUNTIME_CONFIG" ]; then
-  /app/.venv/bin/icloudharbor bootstrap
-fi
+/app/.venv/bin/icloudharbor bootstrap
 
 if [ -e "$IH_RUNTIME_CONFIG" ]; then
   chown "$IH_RUNTIME_UID:$IH_RUNTIME_GID" "$IH_RUNTIME_CONFIG"

@@ -133,7 +133,7 @@ def _log_auth_guidance(
 
 @app.command("bootstrap", hidden=True)
 def bootstrap(ctx: typer.Context) -> None:
-    """Generate the initial YAML from Docker environment parameters."""
+    """Generate YAML initially and synchronize Docker environment overrides."""
 
     try:
         config, created = bootstrap_config(ctx.obj)
@@ -143,7 +143,7 @@ def bootstrap(ctx: typer.Context) -> None:
     if created:
         typer.echo(f"已自动生成配置：{ctx.obj}（账号数={len(config.accounts)}）")
     else:
-        typer.echo(f"现有配置有效：{ctx.obj}（未覆盖）")
+        typer.echo(f"现有配置有效：{ctx.obj}（已同步非空 IH_* 参数）")
 
 
 def _authenticate_account(
