@@ -457,15 +457,35 @@ class PyicloudProtocolAdapter(ICloudProtocol):
     ) -> Any:
         cache_key = (resource.asset_id, resource.version)
         asset = self._asset_versions.get(cache_key)
+
+        # Try the cached asset's URL first (fast path).  If the URL has also
+        # expired (410) we fall back to a CloudKit lookup for a fresh asset.
+        if asset is not None:
+            try:
+                return self._try_asset_url(api, resource, asset, offset)
+            except ProtocolError as exc:
+                if exc.code != ErrorCode.REMOTE_NOT_FOUND:
+                    raise
+                LOGGER.debug(f"缓存资源 URL 也已过期，CloudKit 查找：{resource.asset_id}")
+                asset = None
+
+        # Slow path: fetch a fresh asset from CloudKit.
         if asset is None:
-            LOGGER.debug(f"缓存未命中，CloudKit 查找资源：{resource.asset_id}")
+            LOGGER.debug(f"CloudKit 查找资源：{resource.asset_id}")
             asset = self._find_asset(api, resource.asset_id)
             if asset is None:
                 raise ProtocolError("远端资源不存在", ErrorCode.REMOTE_NOT_FOUND)
             self._asset_versions[cache_key] = asset
-        else:
-            LOGGER.debug(f"缓存命中，复用已扫描资源：{resource.asset_id}")
 
+        return self._try_asset_url(api, resource, asset, offset)
+
+    def _try_asset_url(
+        self,
+        api: Any,
+        resource: RemoteResource,
+        asset: Any,
+        offset: int,
+    ) -> Any:
         versions = getattr(asset, "versions", {}) or {}
         raw = versions.get(resource.version, {})
         refreshed_url = raw.get("url") if isinstance(raw, dict) else None
