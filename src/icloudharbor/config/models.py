@@ -74,6 +74,7 @@ class MediaConfig(StrictModel):
         None
     )
     live_photo_size: Literal["original", "medium", "thumb"] = "original"
+    video_poster_frames: bool = False
     raw: RawConfig = Field(default_factory=RawConfig)
     convert_heic_to_jpeg: bool = False
     jpeg_path: Path | None = None

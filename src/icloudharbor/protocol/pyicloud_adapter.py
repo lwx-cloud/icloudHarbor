@@ -670,6 +670,10 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             return "raw_original"
         if "adjust" in key:
             return "video_adjusted" if is_video else "photo_adjusted"
+        if key in {"medium_image"}:
+            return "video_poster_medium"
+        if key in {"thumb_image"}:
+            return "video_poster_thumb"
         if key in {"medium", "medium_size"}:
             return "video_medium" if is_video else "photo_medium"
         if key in {"thumb", "thumbnail"}:

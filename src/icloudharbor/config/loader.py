@@ -93,6 +93,7 @@ ACCOUNT_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ),
     ("IH_DOWNLOAD_VIDEOS", ("media", "videos"), _parse_bool),
     ("IH_DOWNLOAD_LIVE_PHOTOS", ("media", "live_photos"), _parse_bool),
+    ("IH_VIDEO_POSTER_FRAMES", ("media", "video_poster_frames"), _parse_bool),
     ("IH_PHOTO_SIZE", ("media", "photo_size"), _parse_csv_lower),
     ("IH_LIVE_PHOTO_SIZE", ("media", "live_photo_size"), _lower),
     ("IH_RAW_MODE", ("media", "raw", "mode"), _lower),

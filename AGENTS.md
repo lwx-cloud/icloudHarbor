@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.5.5`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.5.6`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -452,6 +452,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-05 的 0.5.5 配置同步改进：容器每次启动都会运行 bootstrap，校验已有 `config.yaml`
   并把非空 `IH_*` 环境变量的有效覆盖值原子同步写回；未覆盖的高级字段保持不变，通知 Secret
   不落入 YAML。更新文档描述这一行为，并修正 `IH_DOWNLOAD_TIMEOUT` 等参数的生效方式说明。
+- 2026-08-05 的 0.5.6 视频预览帧修复与开关：修复普通视频误下载 JPEG 预览帧的问题
+  （`thumb_image`/`medium_image` 被错误归类为 `photo_original`）；新增 `video_poster_frames`
+  开关（Docker `IH_VIDEO_POSTER_FRAMES`），默认关闭，开启后可选下载视频的中等画质 JPEG 预览帧。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -481,7 +484,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.5.5`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.5.6`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

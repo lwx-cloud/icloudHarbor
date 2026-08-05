@@ -55,6 +55,7 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | --- | --- | --- |
 | `IH_DOWNLOAD_VIDEOS` | `true` | 是否下载普通视频。 |
 | `IH_DOWNLOAD_LIVE_PHOTOS` | `true` | 是否下载 Live Photo。 |
+| `IH_VIDEO_POSTER_FRAMES` | `false` | 是否同时下载视频的 JPEG 预览帧（中等画质）。 |
 | `IH_PHOTO_SIZE` | `original` | `original`、`medium`、`thumb`、`adjusted`、`alternative`，可用逗号组合。 |
 | `IH_LIVE_PHOTO_SIZE` | `original` | `original`、`medium` 或 `thumb`。 |
 | `IH_RAW_MODE` | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg`。 |
@@ -284,6 +285,7 @@ accounts:
       live_photos: true
       photo_size: [original]
       live_photo_size: original
+      video_poster_frames: false
       raw:
         mode: both
       convert_heic_to_jpeg: false

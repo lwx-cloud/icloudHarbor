@@ -38,6 +38,8 @@ def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[Remote
         "video_medium",
         "video_thumbnail",
         "video_adjusted",
+        "video_poster_medium",
+        "video_poster_thumb",
         "raw_original",
         "jpeg_alternative",
         "photo_original",
@@ -81,6 +83,12 @@ def select_resources(asset: RemoteAsset, account: AccountConfig) -> tuple[Remote
         if resource_type == "photo_original" and media.raw.mode == "raw_only":
             continue
         if resource_type.startswith("video_") and not media.videos:
+            continue
+        # Video poster frames (JPEG previews): opt-in, disabled by default.
+        # When enabled, medium_image is preferred (higher quality than thumb_image).
+        if resource_type in {"video_poster_thumb", "video_poster_medium"}:
+            if media.video_poster_frames and resource_type == "video_poster_medium":
+                selected.append(resource)
             continue
         size_by_type = {
             "photo_original": "original",
