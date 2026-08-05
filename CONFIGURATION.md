@@ -43,8 +43,8 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_RUN_ON_START` | `true` | 容器启动后是否安排一次同步。 |
 | `IH_AUTO_DELETE` | `false` | 是否按 iCloud“最近删除”安全清理精确匹配的本地文件。 |
 | `IH_DOWNLOAD_DELAY` | `0` | 启动同步延迟分钟数，范围 0–60。 |
-| `IH_SYNC_STRATEGY` | `cursor` | `cursor` 增量扫描或 `full` 全量扫描。 |
-| `IH_FULL_SCAN_INTERVAL` | `30d` | 增量模式下定期全量校正间隔。 |
+| `IH_SYNC_STRATEGY` | `full` | `full` 全量扫描或 `cursor` 增量扫描。全量模式每次列出全部 iCloud 项目并与本地比对，最可靠，推荐。 |
+| `IH_FULL_SCAN_INTERVAL` | `30d` | 仅增量模式 (`cursor`) 有效：定期全量校正间隔。 |
 
 `IH_AUTO_DELETE=true` 只删除数据库精确匹配且哈希未变化的本地文件，不删除 iCloud 内容，
 不按同名猜测，也不删除未跟踪文件和空目录。
@@ -309,7 +309,7 @@ accounts:
 
     sync:
       mode: backup
-      strategy: cursor
+      strategy: full
       full_scan_interval: 30d
       schedule:
         interval: 24h

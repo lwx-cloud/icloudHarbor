@@ -151,7 +151,7 @@ class ScheduleConfig(StrictModel):
 
 class SyncConfig(StrictModel):
     mode: Literal["backup"] = "backup"
-    strategy: Literal["cursor", "full"] = "cursor"
+    strategy: Literal["cursor", "full"] = "full"
     full_scan_interval: timedelta = timedelta(days=30)
     schedule: str | ScheduleConfig | None = None
     run_on_start: bool = True

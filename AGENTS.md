@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.5.6`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.5.7`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -66,7 +66,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - `sync` 只合并提交后台请求，不在 CLI 进程执行第二个同步；`plan` 是只读远端预览，不创建运行
   记录、不认领本地文件、不通知、不下载或删除、不提交游标。
 - 普通 Docker 参数只接受 `6`、`12`、`24` 三种整数小时；高级 YAML 支持其他间隔、Cron、
-  增量游标与定期全量扫描。
+  全量扫描（默认）和可选的增量游标模式。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
 - 同一 Asset 的多资源并发下载使用 SQLite 原子 UPSERT 记录 Asset、Resource 和本地文件，
@@ -455,6 +455,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-05 的 0.5.6 视频预览帧修复与开关：修复普通视频误下载 JPEG 预览帧的问题
   （`thumb_image`/`medium_image` 被错误归类为 `photo_original`）；新增 `video_poster_frames`
   开关（Docker `IH_VIDEO_POSTER_FRAMES`），默认关闭，开启后可选下载视频的中等画质 JPEG 预览帧。
+- 2026-08-05 的 0.5.7 默认同步策略改为全量扫描：`sync.strategy` 默认值从 `cursor` 改为 `full`。
+  全量模式每次列出全部 iCloud 项目并与本地比对，本地文件被手动删除后可在下次同步自动补回。
+  增量游标模式仍保留，用户可显式设置 `IH_SYNC_STRATEGY=cursor` 切回。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -484,7 +487,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.5.6`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.5.7`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

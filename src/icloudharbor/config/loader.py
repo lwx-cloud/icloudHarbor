@@ -248,7 +248,7 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
                 },
                 "sync": {
                     "mode": "backup",
-                    "strategy": "cursor",
+                    "strategy": "full",
                     "full_scan_interval": "30d",
                     "schedule": "24h",
                     "run_on_start": True,
