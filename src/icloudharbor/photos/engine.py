@@ -201,10 +201,48 @@ class PhotosEngine:
                         )
 
                 limited_assets = self._limit_assets(account, discovered_assets)
-                plan = self.planner.build(limited_assets, account)
-                plan.warnings.extend(deletion_warnings)
+
+                # Process downloads in batches so each asset's download URL is
+                # consumed shortly after the iCloud scan, before it expires (410).
+                # Each batch plans and downloads atomically; cross-batch path
+                # collisions are resolved by the planner's disk-adoption logic.
+                batch_size = 50
+                merged_plan = SyncPlan()
+                merged_plan.warnings = list(deletion_warnings)
+                total_downloaded = 0
+                total_failed = 0
+                total_bytes = 0
+                total_skips = 0
+                total_adoptions = 0
+
+                for start in range(0, len(limited_assets), batch_size):
+                    batch = limited_assets[start : start + batch_size]
+                    batch_plan = self.planner.build(batch, account)
+                    if start == 0:
+                        # Rough space estimate: first batch scaled to total count.
+                        self._check_plan_space(account, batch_plan)
+                    batch_report = DownloadManager(self.protocol, self.repository, account).execute(
+                        batch_plan
+                    )
+                    total_downloaded += batch_report.downloaded_count
+                    total_failed += batch_report.failed_count
+                    total_bytes += batch_report.bytes_downloaded
+                    total_skips += len(batch_plan.skips)
+                    total_adoptions += len(batch_plan.adoptions)
+                    merged_plan.warnings.extend(batch_plan.warnings)
+                    for outcome in batch_report.outcomes:
+                        if not outcome.success:
+                            self._event(
+                                run_id,
+                                "DOWNLOAD_FAILED",
+                                outcome.message or "资源下载失败",
+                                severity="ERROR",
+                                asset_id=outcome.task.asset.asset_id,
+                                payload={"error_code": outcome.error_code},
+                            )
+
                 self.planner.add_local_deletions(
-                    plan,
+                    merged_plan,
                     deleted_assets,
                     account,
                     {(asset.library_id, asset.asset_id) for asset in discovered_assets},
@@ -215,49 +253,37 @@ class PhotosEngine:
                     "PLAN",
                     "同步计划已生成",
                     payload={
-                        "downloads": plan.download_count,
-                        "skips": len(plan.skips),
-                        "adoptions": len(plan.adoptions),
-                        "local_deletions": plan.local_delete_count,
-                        "estimated_bytes": plan.estimated_bytes,
+                        "downloads": total_downloaded,
+                        "skips": total_skips,
+                        "adoptions": total_adoptions,
+                        "local_deletions": merged_plan.local_delete_count,
+                        "estimated_bytes": total_bytes,
                     },
                 )
-                skip_note = f"（含 {len(plan.adoptions)} 个认领已有文件）" if plan.adoptions else ""
+                skip_note = f"（含 {total_adoptions} 个认领已有文件）" if total_adoptions else ""
                 LOGGER.info(
                     f"扫描完成：iCloud 项目={len(limited_assets)}；"
-                    f"待下载文件={plan.download_count}；"
-                    f"已存在文件={len(plan.skips)}{skip_note}；"
-                    f"待删除本地文件={plan.local_delete_count}；"
-                    f"预计数据={plan.estimated_bytes} 字节"
+                    f"待下载文件={total_downloaded + total_failed}；"
+                    f"已存在文件={total_skips}{skip_note}；"
+                    f"待删除本地文件={merged_plan.local_delete_count}；"
+                    f"预计数据={total_bytes} 字节"
                 )
-                if plan.unmatched_deleted_count:
+                if merged_plan.unmatched_deleted_count:
                     LOGGER.info(
-                        f"最近删除：匹配 {plan.local_delete_asset_count} 个项目、"
-                        f"{plan.local_delete_count} 个本地文件；另有 "
-                        f"{plan.unmatched_deleted_count} 个项目没有本地记录，已忽略"
+                        f"最近删除：匹配 {merged_plan.local_delete_asset_count} 个项目、"
+                        f"{merged_plan.local_delete_count} 个本地文件；另有 "
+                        f"{merged_plan.unmatched_deleted_count} 个项目没有本地记录，已忽略"
                     )
-                for warning in plan.warnings:
+                for warning in merged_plan.warnings:
                     self._event(run_id, "PLAN_WARNING", warning, severity="WARNING")
-                self._check_plan_space(account, plan)
 
-                report = DownloadManager(self.protocol, self.repository, account).execute(plan)
-                for outcome in report.outcomes:
-                    if not outcome.success:
-                        self._event(
-                            run_id,
-                            "DOWNLOAD_FAILED",
-                            outcome.message or "资源下载失败",
-                            severity="ERROR",
-                            asset_id=outcome.task.asset.asset_id,
-                            payload={"error_code": outcome.error_code},
-                        )
                 deletion_report = LocalDeletionReport(0, 0, 0, ())
-                if report.failed_count == 0 and plan.local_deletions:
+                if total_failed == 0 and merged_plan.local_deletions:
                     self._event(run_id, "LOCAL_DELETE", "开始处理 iCloud 最近删除对应本地文件")
                     deletion_report = LocalDeletionManager(
                         self.repository,
                         account,
-                    ).execute(plan.local_deletions)
+                    ).execute(merged_plan.local_deletions)
                     for deletion_outcome in deletion_report.outcomes:
                         if not deletion_outcome.success:
                             self._event(
@@ -268,7 +294,7 @@ class PhotosEngine:
                                 asset_id=deletion_outcome.task.asset.asset_id,
                                 payload={"error_code": deletion_outcome.error_code},
                             )
-                total_failed = report.failed_count + deletion_report.failed_count
+                total_failed += deletion_report.failed_count
                 status = "COMPLETED" if total_failed == 0 else "PARTIAL"
                 if total_failed == 0:
                     for library_id, cursor, was_full in cursor_updates:
@@ -281,20 +307,20 @@ class PhotosEngine:
                 self.repository.finish_run(
                     run_id,
                     status=status,
-                    downloaded_count=report.downloaded_count,
-                    skipped_count=len(plan.skips),
+                    downloaded_count=total_downloaded,
+                    skipped_count=total_skips,
                     failed_count=total_failed,
-                    bytes_downloaded=report.bytes_downloaded,
+                    bytes_downloaded=total_bytes,
                 )
                 self._event(run_id, "REPORT", f"同步结束：{status}")
                 return SyncExecution(
                     run_id,
                     status,
-                    report.downloaded_count,
-                    len(plan.skips),
+                    total_downloaded,
+                    total_skips,
                     total_failed,
-                    report.bytes_downloaded,
-                    plan,
+                    total_bytes,
+                    merged_plan,
                     deleted_count=deletion_report.deleted_count,
                     delete_failed_count=deletion_report.failed_count,
                     bytes_deleted=deletion_report.bytes_deleted,
