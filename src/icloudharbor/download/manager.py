@@ -121,10 +121,21 @@ class DownloadManager:
     def _download_with_retry(self, task: DownloadTask) -> DownloadOutcome:
         last_error: Exception | None = None
         path = display_download_path(self.account.destination.path, task.relative_path)
+        brief = task.relative_path.name
+        started = time.monotonic()
         LOGGER.info(f"正在下载：{path}")
         for attempt in range(self.account.download.max_retries + 1):
             try:
                 size = self._download_once(task)
+                elapsed = time.monotonic() - started
+                speed = size / elapsed if elapsed > 0 else 0
+                LOGGER.debug(
+                    f"完成下载：{brief}；"
+                    f"耗时 {elapsed:.1f}s；"
+                    f"大小 {size} 字节；"
+                    f"速率 {speed/1000:.0f}KB/s；"
+                    f"重试 {attempt} 次",
+                )
                 target = (self.destination / task.relative_path).resolve()
                 artifacts = self.postprocessor.process_download(
                     target,

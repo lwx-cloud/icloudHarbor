@@ -3,7 +3,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import structlog
+
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError
+
+LOGGER = structlog.get_logger(__name__)
 
 
 def verify_file(
@@ -20,6 +24,9 @@ def verify_file(
             size += len(chunk)
             digest.update(chunk)
     sha256 = digest.hexdigest()
+    LOGGER.debug(
+        f"校验完成：{path.name}；大小 {size}；SHA-256 {sha256[:12]}…",
+    )
     if expected_size is not None and size != expected_size:
         raise HarborError(
             f"资源大小不一致：期望 {expected_size}，实际 {size}",

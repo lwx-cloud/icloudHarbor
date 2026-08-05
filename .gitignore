@@ -18,3 +18,4 @@ data/
 *.db-wal
 *.part
 .workbuddy/
+.tmp/

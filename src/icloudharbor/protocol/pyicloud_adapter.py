@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from icloudharbor.protocol.base import ICloudProtocol
 from icloudharbor.protocol.exceptions import (
     AuthenticationRequired,
@@ -39,6 +41,8 @@ from icloudharbor.protocol.models import (
 _REFRESHABLE_RESOURCE_STATUSES = frozenset({401, 403, 410})
 _DOWNLOAD_CONNECT_TIMEOUT = 10
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+LOGGER = structlog.get_logger(__name__)
 
 
 class PyicloudProtocolAdapter(ICloudProtocol):
@@ -386,6 +390,12 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                 raise ProtocolError("远端资源已不可用", ErrorCode.REMOTE_NOT_FOUND)
             response.raise_for_status()
             total = response.headers.get("Content-Length")
+            LOGGER.debug(
+                f"下载连接已建立：{resource.filename}；"
+                f"Content-Length={total or '未知'}；"
+                f"Range={'bytes=' + str(offset) if offset else '无'}；"
+                f"Status={response.status_code}",
+            )
             return ResourceStream(
                 self._iter_response_chunks(api, response),
                 status_code=response.status_code,
