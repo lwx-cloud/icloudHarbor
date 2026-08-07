@@ -12,6 +12,7 @@ services:
     environment:
       - TZ=${IH_TIMEZONE:-UTC}
       - IH_CONFIG_FILE=/config/config.yaml
+      - IH_CONFIG_MODE=${IH_CONFIG_MODE:-env}
 
     volumes:
       - "${IH_CONFIG_PATH:-./data/config}:/config"

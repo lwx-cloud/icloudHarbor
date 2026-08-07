@@ -6,7 +6,7 @@
 iCloudHarbor 是一个运行在 Docker 中的 iCloud Photos 备份工具。它会定时把照片、视频、
 Live Photo 和 RAW 下载到 Linux、群晖或其他 NAS。
 
-> 当前版本：`0.6.1`。只支持从 iCloud 备份到本地，不会删除 iCloud 中的照片。
+> 当前版本：`0.6.2`。只支持从 iCloud 备份到本地，不会删除 iCloud 中的照片。
 
 [立即部署](#最简单部署) · [日常使用](#日常使用) · [更新](#更新) ·
 [完整配置](CONFIGURATION.md)
@@ -76,6 +76,7 @@ id 管理员用户名
 | 参数 | 默认作用 |
 | --- | --- |
 | `IH_CONFIG_PATH` | 保存数据库、登录状态和程序配置，不要随意更换。 |
+| `IH_CONFIG_MODE=env` | 每次启动都以 `.env` 和程序默认值生成配置，普通部署保持此值。 |
 | `IH_TIMEZONE` | 日志和定时任务使用的时区。 |
 | `IH_SYNC_INTERVAL=12` | 每 12 小时检查一次；只能填写 `6`、`12` 或 `24`。 |
 | `IH_RUN_ON_START=true` | 容器启动后立即检查一次。 |
@@ -130,6 +131,10 @@ docker compose exec icloudharbor icloudharbor setup
 
 ## 更新
 
+如果手工修改过 `config/config.yaml`，从 0.6.1 升级到 0.6.2 前请先按
+[升级说明](CONFIGURATION.md#从-061-升级到-062)备份配置并设置 `IH_CONFIG_MODE=yaml`。
+普通 `.env` 用户不需要这一步。
+
 进入部署目录后运行：
 
 ```bash
@@ -141,7 +146,7 @@ docker compose exec icloudharbor icloudharbor --version
 
 更新不会删除照片、数据库或登录状态。不要重新运行首次安装脚本。
 
-从旧版本升级以及完整扫描一次的建议见
+其他旧版本升级以及完整扫描一次的建议见
 [CONFIGURATION.md 的常见配置](CONFIGURATION.md#常见配置)。
 
 ## 更多设置
@@ -152,7 +157,7 @@ docker compose exec icloudharbor icloudharbor --version
 | 下载照片尺寸、Live Photo、RAW/JPEG | [媒体](CONFIGURATION.md#媒体) |
 | 指定相册、日期或加快日常扫描 | [相册和筛选](CONFIGURATION.md#相册和筛选) |
 | 下载目录、文件名、权限和并发数 | [路径、权限和下载](CONFIGURATION.md#路径权限和下载) |
-| Cron、多通知渠道等高级功能 | [高级 config.yaml](CONFIGURATION.md#高级-configyaml) |
+| Cron、多通知渠道等高级功能 | [高级 config.yaml 与 yaml 模式](CONFIGURATION.md#高级-configyaml) |
 
 遇到 `marker_missing`、`AUTH_REQUIRED` 或目录权限问题，请查看
 [CONFIGURATION.md 的常见问题](CONFIGURATION.md#常见问题)。

@@ -17,6 +17,7 @@ from icloudharbor import __version__
 from icloudharbor.application import HarborApplication
 from icloudharbor.config.loader import (
     bootstrap_config,
+    config_mode_from_env,
     config_path_from_env,
 )
 from icloudharbor.config.models import AccountConfig
@@ -69,7 +70,7 @@ def main(
     ctx: typer.Context,
     config_file: Annotated[
         Path | None,
-        typer.Option("--config", "-c", help="配置文件路径。"),
+        typer.Option("--config", "-c", help="配置文件或 env 模式快照路径。"),
     ] = None,
     version: Annotated[
         bool,
@@ -133,17 +134,20 @@ def _log_auth_guidance(
 
 @app.command("bootstrap", hidden=True)
 def bootstrap(ctx: typer.Context) -> None:
-    """Generate YAML initially and synchronize Docker environment overrides."""
+    """Generate an env snapshot or validate the advanced YAML configuration."""
 
     try:
         config, created = bootstrap_config(ctx.obj)
+        mode = config_mode_from_env()
     except Exception as exc:
         _echo_configuration_error("无法自动生成配置", exc)
         raise typer.Exit(2) from exc
-    if created:
-        typer.echo(f"已自动生成配置：{ctx.obj}（账号数={len(config.accounts)}）")
+    if mode == "yaml":
+        typer.echo(f"现有配置有效：{ctx.obj}（yaml 模式：已校验高级配置）")
+    elif created:
+        typer.echo(f"已按当前 IH_* 参数生成配置：{ctx.obj}（账号数={len(config.accounts)}）")
     else:
-        typer.echo(f"现有配置有效：{ctx.obj}（已同步 IH_* 参数）")
+        typer.echo(f"配置有效：{ctx.obj}（env 模式：已按当前 IH_* 参数同步）")
 
 
 def _authenticate_account(

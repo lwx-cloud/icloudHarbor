@@ -1,18 +1,21 @@
 # iCloudHarbor 配置
 
-普通 Docker 部署只需要编辑 `.env`。高级 YAML 只用于 Cron、多渠道通知或精细事件控制。
+普通 Docker 部署只需要编辑 `.env`，并保持 `IH_CONFIG_MODE=env`。高级 YAML 只用于 Cron、
+多渠道通知或精细事件控制，并需要显式设置 `IH_CONFIG_MODE=yaml`。
 
-配置优先级：
+两种模式的配置来源互不混用：
 
-```text
-当前非空 IH_* 环境变量 > /config/config.yaml > 程序默认值
-```
+- `env`（默认）：每次容器启动都从程序默认值开始，再应用当前非空 `IH_*` 参数，并原子生成
+  `/config/config.yaml`。`.env` 没有填写或已经删除的参数使用默认值，生成的 YAML 只是本次
+  有效配置快照，不是下次启动的配置来源。
+- `yaml`：直接严格校验并使用已有 `/config/config.yaml`，普通配置类 `IH_*` 参数不再覆盖
+  YAML。通知 Secret 仍可由容器环境写入 `/config/notification-keys/`，YAML 只引用密钥文件。
 
 配置采用严格校验：参数名写错、值越界或使用已删除参数时会直接停止，不会静默忽略。
 Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在终端读取。
 
-容器会记住哪些字段曾由 `.env` 管理。以后删除或清空这些参数并重建容器时，对应字段会恢复
-程序默认值；从未由 `.env` 管理的高级 YAML 字段仍保持不变。
+切换到 `yaml` 前必须先让 `env` 模式生成一次配置文件；`yaml` 模式不会在文件缺失时自动创建
+模板。两种模式的详细切换步骤见[高级 `config.yaml`](#高级-configyaml)。
 
 ## 基础参数
 
@@ -22,9 +25,10 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `IH_APPLE_ID` | 无，必填 | Apple Account 邮箱，同时作为默认账号 ID 和显示名称。 |
+| `IH_APPLE_ID` | env 模式必填 | Apple Account 邮箱，同时作为默认账号 ID 和显示名称；yaml 模式由 YAML 提供。 |
 | `IH_CONTAINER_NAME` | `icloudharbor` | 容器名称；通常不需要修改。 |
 | `IH_CONFIG_PATH` | `./data/config` | 配置、数据库、Session、凭据和通知密钥目录。 |
+| `IH_CONFIG_MODE` | `env` | `env` 每次按当前环境生成配置；手工维护高级 YAML 时改为 `yaml`。 |
 | `IH_PHOTOS_PATH` | `./data/photos` | 照片保存目录，挂载到容器 `/photos`。 |
 | `IH_PUID` | `1000` | 容器进程和新文件使用的宿主机 UID，必须大于 0。 |
 | `IH_PGID` | `1000` | 容器进程和新文件使用的宿主机 GID，必须大于 0。 |
@@ -219,8 +223,15 @@ Docker 管理员仍可查看容器环境，因此整个部署目录和 `/config`
 
 ### 高级 YAML：多渠道或逐事件控制
 
-高级模式下，从 `.env` 删除所有 `IH_NOTIFY*`、渠道凭据和媒体 ID 参数，然后编辑
-`/config/config.yaml`：
+先确认 `/config/config.yaml` 已由普通模式生成，再在 `.env` 设置：
+
+```dotenv
+IH_CONFIG_MODE=yaml
+```
+
+然后编辑 `/config/config.yaml`。`yaml` 模式不会应用 `IH_NOTIFY`、`IH_NOTIFY_TYPE` 等普通通知
+参数，因此建议删除这些无效项，避免以后误解配置来源。通知 Secret 可以继续保留在 `.env`，
+容器入口会把它写入下方 YAML 引用的固定密钥文件；也可以自行创建同权限的密钥文件：
 
 ```yaml
 notifications:
@@ -258,12 +269,18 @@ notifications:
 
 ## 高级 `config.yaml`
 
-首次启动会自动生成 `/config/config.yaml`。以后每次容器启动都会校验已有文件，并把当前非空
-`IH_*` 环境变量对应的有效值原子同步写入 YAML。程序同时在
-`/config/.config.yaml.environment-overrides.json` 记录曾由 `.env` 管理的参数名；参数被删除或
-改为空值后，对应 YAML 字段在下次启动时恢复默认值。状态文件不保存参数值、邮箱或 Secret。
-从未由 `.env` 管理的高级字段保持不变。通知 Secret 仍只写入
-`/config/notification-keys/`，YAML 只保存密钥文件路径。
+普通 `env` 模式会自动生成 `/config/config.yaml`，但每次启动都会以程序默认值和当前 `.env`
+重新生成，因此不要在该模式下手工修改 YAML。需要 Cron、多渠道通知或精细事件控制时：
+
+1. 先以 `IH_CONFIG_MODE=env` 成功启动一次，生成完整 `/config/config.yaml`；
+2. 在 `.env` 改为 `IH_CONFIG_MODE=yaml`；
+3. 编辑 `/config/config.yaml`，再重建容器；
+4. 以后所有普通配置都在 YAML 修改，`.env` 只保留 Compose 路径、UID/GID、模式和所需通知
+   Secret 等容器级参数。
+
+`yaml` 模式要求配置文件已经存在，文件缺失、字段写错或值无效都会停止启动，不会回退到
+`env`。0.6.1 产生的 `.config.yaml.environment-overrides.json` 已不再使用，0.6.2 成功启动后会
+自动删除。通知 Secret 仍只写入 `/config/notification-keys/`，YAML 只保存密钥文件路径。
 
 下面是完整结构示例，未使用的可选字段可以删除：
 
@@ -393,11 +410,27 @@ security:
 
 ## 常见配置
 
+### 从 0.6.1 升级到 0.6.2
+
+不需要重建数据库。0.6.2 默认使用 `env` 模式：每次启动都从程序默认值和当前 `.env` 重新生成
+配置，删除 `IH_LOG_LEVEL=DEBUG` 后会直接恢复 `INFO`，不再依赖环境变量历史状态文件。普通用户
+建议在 `.env` 增加 `IH_CONFIG_MODE=env`，不增加时也会默认使用 `env`。
+
+如果手工修改过 `/config/config.yaml`，并且需要保留 Cron、多通知渠道、逐事件开关或其他高级
+YAML 设置，请先备份宿主机上的 `config/config.yaml`，再在拉取并重建 0.6.2 容器前向 `.env`
+增加：
+
+```dotenv
+IH_CONFIG_MODE=yaml
+```
+
+否则默认 `env` 模式会按当前 `.env` 和默认值重新生成 YAML。0.6.2 成功启动后会自动删除 0.6.1
+遗留的 `.config.yaml.environment-overrides.json`，不会删除照片、数据库或认证状态。
+
 ### 从 0.6.0 升级到 0.6.1
 
-不需要重建数据库。0.6.1 会自动创建环境变量覆盖状态文件。首次以 0.6.1 启动时，请保留目前
-仍在使用的 `.env` 参数，让程序记录其参数名；以后删除或清空这些参数并重建容器时，对应字段
-会恢复默认值。
+不需要重建数据库。0.6.1 曾使用环境变量覆盖状态文件识别后来被删除的参数；该机制已由 0.6.2
+的明确 `env` / `yaml` 双模式取代。
 
 ### 从 0.5.x 升级到 0.6.0
 
@@ -414,6 +447,7 @@ IH_PHOTOS_PATH=/volume2/photos/iCloud
 IH_PUID=1026
 IH_PGID=100
 IH_TIMEZONE=Asia/Shanghai
+IH_CONFIG_MODE=env
 IH_REGION=global
 IH_SYNC_INTERVAL=12
 ```
@@ -464,13 +498,12 @@ IH_JPEG_QUALITY=95
 docker compose up -d --force-recreate
 ```
 
-启动日志出现“已同步 IH_* 参数”后，`config.yaml` 中对应值也会更新。已经由 `.env` 管理的参数
-被删除或改为空值后，下次重建容器会把对应字段恢复为默认值。例如删除 `IH_LOG_LEVEL=DEBUG`
-会恢复为 `INFO`。从未由 `.env` 管理的高级 YAML 字段不会被重置。
+`env` 模式重建容器后，`config.yaml` 会按当前 `.env` 和程序默认值重新生成。参数被删除或改为
+空值后会直接使用默认值。例如删除 `IH_LOG_LEVEL=DEBUG` 会恢复为 `INFO`，不需要先保留参数
+启动一次，也不需要手工修改 YAML。
 
-从旧版本首次升级时，程序还没有历史参数名记录。如果某个参数已经提前从 `.env` 删除，请先
-保留或重新填写该参数启动一次，让程序建立记录，再删除并重建容器；也可以直接在
-`config.yaml` 中把该字段改回默认值。
+如果设置的是 `IH_CONFIG_MODE=yaml`，`.env` 中普通配置参数不会覆盖 YAML；请直接修改
+`/config/config.yaml` 并重建容器。
 
 ### 管理员打不开目录
 

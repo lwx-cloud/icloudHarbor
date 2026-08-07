@@ -50,6 +50,7 @@ IH_PHOTOS_PATH="请填写照片保存目录"
 IH_PUID="$ENV_PUID"
 IH_PGID="$ENV_PGID"
 IH_TIMEZONE="Asia/Shanghai"
+IH_CONFIG_MODE="env"
 # iCloud 区域必须显式选择：全球账号填 global；中国大陆（云上贵州）账号填 china
 IH_REGION="global"
 IH_SYNC_INTERVAL="12"

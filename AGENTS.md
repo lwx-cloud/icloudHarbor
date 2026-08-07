@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.6.1`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.6.2`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -53,10 +53,11 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 个人图库 `root`、协议层可见的共享图库、多图库聚合以及相册包含/排除。
 - 中国大陆和全球 iCloud 服务端点；`region` 必须显式选择 `global` 或 `china`，不再自动猜测。
 - Apple 双重认证验证码。
-- Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`；后续启动会校验已有 YAML，
-  把当前非空环境变量的有效覆盖值原子同步写回，并用只含参数名的隐藏状态文件识别后来被删除或
-  清空的环境变量，将对应字段恢复默认值；从未由环境变量管理的高级字段保持不变，通知 Secret
-  不落入 YAML 或环境覆盖状态文件。
+- Docker 默认使用 `IH_CONFIG_MODE=env`：每次启动都从程序默认值开始，应用当前非空 `IH_*`
+  参数并原子生成 `/config/config.yaml`；未填写、被删除或清空的参数直接使用默认值，YAML 只是
+  有效配置快照。显式选择 `IH_CONFIG_MODE=yaml` 时只严格校验并使用已有 YAML，普通配置环境变量
+  不再覆盖它；通知 Secret 在两种模式下都不落入 YAML。0.6.1 的环境覆盖状态文件成功启动后
+  自动清理。
 - `deploy/install.sh` 是无交互部署文件生成器：以执行命令时的当前目录为部署目录，只创建
   `config/`、默认 `.env` 和 `docker-compose.yaml`，不检查 Docker、不创建配置子目录或照片
   挂载标记，也不拉取镜像、启动容器、运行状态检查或认证。
@@ -141,8 +142,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
 2. 把 `/config` 根目录和应用管理的运行目录交给配置的非 root UID/GID，并收紧私有目录权限。
-3. 执行隐藏内部入口 `icloudharbor bootstrap`：配置不存在时生成，存在时校验并同步当前非空
-   `IH_*` 环境变量覆盖值；曾由环境变量管理但后来被删除的字段恢复默认值。
+3. 执行隐藏内部入口 `icloudharbor bootstrap`：`env` 模式按默认值和当前 `IH_*` 参数生成配置
+   快照；`yaml` 模式要求配置已存在并执行严格校验。成功后清理 0.6.1 遗留的环境覆盖状态文件。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
    最多运行一个认证或同步操作。
@@ -199,7 +200,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `application.py`：依赖装配中心，创建数据库、协议适配器、锁、健康检查和通知器。
 - `config/models.py`：严格的 Pydantic 配置结构、默认值、取值范围和安全约束；挂载标记名与
   下载块大小是固定常量，不是公开配置项。
-- `config/loader.py`：YAML 加载、首次生成、`IH_*` 覆盖、严格校验和原子写入。
+- `config/loader.py`：`env` / `yaml` 配置模式、YAML 加载、`IH_*` 解析、严格校验和原子写入。
 - `config/validation.py`：容量、时长等人类可读值解析。
 - `auth/manager.py`：认证状态与协议调用的协调。
 - `auth/session_store.py`：保存非敏感的认证状态元数据。
@@ -239,7 +240,6 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 ```text
 /config/
 ├── config.yaml
-├── .config.yaml.environment-overrides.json  # 仅记录由 Docker 环境管理的参数名
 ├── credentials/
 │   ├── vault.key
 │   └── <account-id>.json
@@ -273,16 +273,20 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
   通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
-- 环境覆盖状态文件只能记录可恢复默认值的 `IH_*` 参数名，不得记录参数值、Apple Account、通知
-  Secret 或其他凭据；删除或损坏该文件会丢失环境变量删除历史，但不得因此猜测重置高级 YAML。
+- `IH_CONFIG_MODE` 只允许 `env` 或 `yaml`，默认 `env`。`env` 模式不得读取旧 YAML 作为配置来源，
+  必须每次从固定 Docker 默认值和当前环境重建；`yaml` 模式不得应用普通配置环境变量，且配置
+  文件缺失时必须失败关闭。切换到 `yaml` 前应先用 `env` 生成一次完整配置。
+- 0.6.1 的 `.config.yaml.environment-overrides.json` 只允许在配置成功生成或校验后精确删除；不得
+  扩大清理范围，也不得再把它作为配置来源。
 - 一键安装器不得读取 `/dev/tty` 或标准输入，不得询问任何参数；只在结束时输出一次成功或
   失败。安装目录固定为执行命令时的当前目录，不提供路径探测、旧项目识别或容器接管。
 - 安装器只创建当前目录的 `config/`，不得预建数据库、Session、凭据、锁等子目录，不得创建
   照片目录或挂载标记，不得修改照片库属主和 NAS ACL。
 - 生成的 `.env` 固定包含 `IH_APPLE_ID`、`IH_CONFIG_PATH`、`IH_PHOTOS_PATH`、`IH_PUID`、
-  `IH_PGID`、`IH_TIMEZONE`、`IH_REGION`、`IH_SYNC_INTERVAL`、`IH_RUN_ON_START`、
-  `IH_PHOTO_SIZE`、`IH_NOTIFY` 十一项；配置目录是当前目录下的 `config/`，账号和照片路径使用
-  中文待填写提示，通知默认关闭，其余默认值分别为 Shanghai、global、12、true、original。
+  `IH_PGID`、`IH_TIMEZONE`、`IH_CONFIG_MODE`、`IH_REGION`、`IH_SYNC_INTERVAL`、
+  `IH_RUN_ON_START`、`IH_PHOTO_SIZE`、`IH_NOTIFY` 十二项；配置目录是当前目录下的 `config/`，
+  账号和照片路径使用中文待填写提示，通知默认关闭，其余默认值分别为 Shanghai、env、global、
+  12、true、original。
   UID/GID 优先使用执行 `sudo` 前的非 root 用户，其次使用当前目录的非 root 属主；都无法确认
   时使用中文待填写提示，不得悄悄回退到可能造成权限问题的 `1000:1000`。
 - 以 root 运行且成功识别宿主机用户时，安装器把新建的 `config/`、`.env` 和
@@ -301,7 +305,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - Docker 通知参数必须以 `IH_NOTIFY=true/false` 作为唯一总开关；开启时必须通过
   `IH_NOTIFY_TYPE` 在 `bark`、`serverchan`、`telegram`、`wecom`、`webhook` 中选择一个。
   简单模式统一开启四类事件，不得重新增加四个事件环境变量或通过“任意渠道参数非空”隐式
-  开启。高级 YAML 可保留多渠道和 `startup/success/failure/auth_required` 精细开关。
+  开启。高级 YAML 必须显式使用 `IH_CONFIG_MODE=yaml`，可保留多渠道和
+  `startup/success/failure/auth_required` 精细开关。
 - 企业微信 Docker 字段必须与其 API 概念清晰对应：`IH_WECOM_CORP_ID`、
   `IH_WECOM_CORP_SECRET`、`IH_WECOM_AGENT_ID`、`IH_WECOM_TO_USER`；不得仅为缩短名称而把
   `AGENT_ID`、`TO_USER` 或 `CONTENT_SOURCE_URL` 改成含义不清的短词。
@@ -481,6 +486,10 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 2026-08-07 的 0.6.1 环境变量删除同步：Docker bootstrap 使用只记录参数名的隐藏状态文件
   跟踪由 `.env` 管理的字段；参数被删除或清空后恢复程序默认值，从未由环境变量管理的高级
   YAML 字段保持不变。状态文件不保存邮箱、Secret、Token 或参数值。
+- 2026-08-07 的 0.6.2 配置来源明确化：默认 `env` 模式每次从固定默认值和当前非空 `IH_*`
+  参数重新生成配置快照，删除 `IH_LOG_LEVEL=DEBUG` 等参数后无需历史记录即可立即恢复默认值；
+  高级用户显式选择 `yaml` 模式后只使用已有 YAML。成功启动会清理 0.6.1 遗留的环境覆盖状态
+  文件，通知 Secret 仍不写入 YAML。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -510,7 +519,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.6.1`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.6.2`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。
