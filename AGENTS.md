@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.5.10`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.6.0`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -69,10 +69,13 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
   全量扫描（默认）和可选的增量游标模式。
 - 容器异常终止后，在独占文件锁保护下自动恢复同名 SQLite 残留租约。
 - 照片、视频、Live Photo、RAW/JPEG、原片/编辑版/尺寸选择和 HEIC 转 JPEG。
+- RAW/JPEG 按真实资源类型处理，`prefer_raw` 与 `prefer_jpeg` 在首选不存在时安全回退。
 - 同一 Asset 的多资源并发下载使用 SQLite 原子 UPSERT 记录 Asset、Resource 和本地文件，
   不会因 Live Photo、RAW/JPEG 或多尺寸资源同时完成而触发唯一键竞态。
+- 不同 Asset 同名时只给冲突项追加稳定 Asset ID，同一 Asset 多尺寸冲突使用版本与 Asset ID；
+  冲突路径跨下载批次共享并持久化，不能覆盖、永久跳过或在重启后继续生成数字副本。
 - 原始资源和转换 JPEG 的文件修改时间统一恢复为 iCloud 拍摄时间，全量扫描会校正历史文件。
-- 日期、收藏、隐藏、最近项目及连续已有项目停止筛选。
+- 日期、收藏、隐藏、最近项目及连续已有项目停止筛选；后者会在达到阈值时立即停止远程分页。
 - 可选 `IH_AUTO_DELETE` 本地清理，默认关闭；只扫描个人图库“最近删除”，按账号、图库和 Asset
   ID 精确匹配 SQLite 记录，并在删除前复核路径归属、文件类型、大小与 SHA-256。
 - 可选的文件/目录权限和 Synology Photos touch 索引兼容。
@@ -210,7 +213,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `photos/planner.py`：幂等计划、本地完整性判断和修复决策；只读模式不持久化磁盘认领。
 - `photos/policies.py`：媒体、RAW、版本、收藏、隐藏和日期策略。
 - `photos/naming.py`：安全路径渲染、跨平台字符清理和冲突处理。
-- `download/manager.py`：并发下载、断点续传、重试和原子落盘。
+- `download/manager.py`：并发下载、资源指纹绑定的断点续传、流式 SHA-256、重试和原子落盘。
 - `download/deletion.py`：把“最近删除”的精确 Asset ID 匹配安全执行为本地删除，包含路径、归属
   和 SHA-256 复核。
 - `download/postprocess.py`：文件权限、HEIC 转 JPEG 和 Synology Photos 索引触发。
@@ -319,7 +322,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - `DownloadManager` 在 `os.replace()` 前先写入数据库提交意图是故障恢复设计：进程在两步间
   退出时，下次计划会发现正式文件缺失并修复确定路径。不要随意颠倒这两个操作。
 - SHA-256 总会为本地文件计算并保存，但仅在 Apple 返回有效 SHA-256 时比较；远端大小为空时
-  也不能伪造期望值。
+  也不能伪造期望值。下载时必须随流计算，已跟踪文件的普通同步不得重新通读哈希；自动删除前
+  仍必须重新通读校验。
 - 配置必须保持 `extra="forbid"`，未知参数和已删除的旧参数应报错，不得静默忽略或恢复未经
   明确要求的迁移兼容。
 - 新增 Docker 参数时，必须同步更新 loader、Compose、`.env.example`、测试和
@@ -464,6 +468,11 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   消除扫描与下载之间的时间间隔，避免 Apple CDN 临时 URL 过期导致 410 刷新延迟。
 - 2026-08-05 的 0.5.10 410 刷新修复：`_refresh_resource` 缓存命中后若 URL 仍过期（410），
   自动回退到 CloudKit 查找新鲜 URL，而非直接报错 REMOTE_NOT_FOUND。
+- 2026-08-07 的 0.6.0 扫描与幂等改进：连续已有项目达到阈值时立即停止 CloudKit 分页；批量
+  读取 SQLite 状态且普通同步不再重复读取全部历史文件计算 SHA-256；下载随流计算哈希，断点
+  文件绑定资源指纹。修复同名不同 Asset、跨 50 项下载批次和同一 Asset 多尺寸资源被永久跳过
+  或错误共用路径的问题，冲突项使用确定后缀并可在数据库丢失后重新认领。RAW/JPEG 按真实
+  类型选择，两个偏好模式在首选缺失时回退。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -493,7 +502,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.5.10`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.6.0`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

@@ -58,12 +58,14 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_VIDEO_POSTER_FRAMES` | `false` | 是否同时下载视频的 JPEG 预览帧（中等画质）。 |
 | `IH_PHOTO_SIZE` | `original` | `original`、`medium`、`thumb`、`adjusted`、`alternative`，可用逗号组合。 |
 | `IH_LIVE_PHOTO_SIZE` | `original` | `original`、`medium` 或 `thumb`。 |
-| `IH_RAW_MODE` | `both` | `raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg`。 |
+| `IH_RAW_MODE` | `both` | RAW/JPEG 配对选择：`raw_only`、`jpeg_only`、`both`、`prefer_raw`、`prefer_jpeg`。 |
 | `IH_CONVERT_HEIC_TO_JPEG` | `false` | 保留 HEIC 原片并额外生成 JPEG。 |
 | `IH_JPEG_PATH` | 与原片相同 | JPEG 的容器内目录，例如 `/photos/jpeg`。 |
 | `IH_JPEG_QUALITY` | `100` | JPEG 质量，范围 0–100。 |
 
-显式填写 `IH_PHOTO_SIZE` 后，只有列表中包含 `alternative`，RAW/JPEG 伴随资源才会进入计划。
+RAW/JPEG 资源按实际文件类型识别，不假定 Apple 的 `original` 一定是 RAW、`alternative` 一定
+是 JPEG。`both` 保存两者；`raw_only` 或 `jpeg_only` 只保存指定类型；`prefer_raw` 和
+`prefer_jpeg` 只保存首选类型，首选不存在时自动回退到另一种，避免整张照片被漏掉。
 
 ### 相册和筛选
 
@@ -77,7 +79,7 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 | `IH_FAVORITES_ONLY` | `false` | 只下载收藏。 |
 | `IH_INCLUDE_HIDDEN` | `false` | 是否包含隐藏项目。 |
 | `IH_RECENT_ONLY` | 空 | 只处理最近加入的 N 个项目。 |
-| `IH_UNTIL_FOUND` | 空 | 连续遇到 N 个已存在项目后停止扫描。 |
+| `IH_UNTIL_FOUND` | 空 | 按最新顺序扫描，连续遇到 N 个已存在项目后立即停止远端分页；适合首次完整备份后加速日常同步。 |
 
 ### 路径、权限和下载
 
@@ -96,6 +98,10 @@ Apple 密码和验证码不属于配置参数，只由 `icloudharbor setup` 在�
 
 0.5.4 起新配置的下载读取超时默认为 30 秒。若已有配置仍是 `timeout: 300`，可在 `.env`
 增加 `IH_DOWNLOAD_TIMEOUT=30` 后重建容器；启动时会把这个非空环境变量同步写入 `config.yaml`。
+
+下载过程中同步计算并保存 SHA-256，不会在文件写完后再完整读取一遍。后续同步对数据库已跟踪
+文件只检查状态、存在性和大小；只有首次认领磁盘旧文件或执行自动删除前才重新读取文件计算
+SHA-256。断点文件名包含远端资源指纹，资源版本、大小或校验信息变化后不会错误续接旧片段。
 
 ### 日志和账号显示
 
@@ -373,6 +379,12 @@ security:
 模板必须是目标目录内的相对路径，不能包含 `..`。Windows 非法字符、控制字符和尾随点会被
 清理；空名称会回退到 `asset_id`。
 
+默认 `suffix_asset_id` 只在真实冲突时加后缀：不同 Asset 使用短 Asset ID，同一 Asset 的
+多尺寸资源使用版本名和短 Asset ID。冲突路径会写入 SQLite，容器重启后继续使用同一路径；
+即使数据库丢失，磁盘上的确定路径也会被重新认领，不会继续产生 `_2`、`_3` 副本。
+`always_asset_id` 对所有文件加 Asset ID，`timestamp` 在冲突时使用拍摄时间和 Asset ID，
+`error` 则在冲突时停止。
+
 ## 常见配置
 
 ### 群晖保存到 `/volume2`
@@ -399,6 +411,16 @@ IH_SYNC_INTERVAL=12
 ```dotenv
 IH_RECENT_ONLY=100
 ```
+
+### 完整备份后加速日常扫描
+
+```dotenv
+IH_UNTIL_FOUND=10
+```
+
+它会按最新顺序读取 iCloud，连续遇到 10 个已在本地的项目后立即停止远程
+分页。请先完成至少一次不限制的完整备份；开启后不会巡检停止位置之后的旧项目，需要
+完整对账时应临时删除该参数。
 
 ### 只下载指定相册
 
@@ -455,6 +477,6 @@ docker compose up -d --force-recreate
 - Apple 密码不会进入 `.env`、Compose、日志或镜像层；
 - 没有 `.icloudharbor-mounted` 时拒绝下载；
 - 只有全部资源成功才提交同步游标；
-- 正式文件只由已校验的同目录 `.part` 文件原子替换；
+- 正式文件只由已校验、且绑定远端资源身份的同目录 `.part` 文件原子替换；
 - 永远不删除 iCloud 内容；
 - 本地自动清理默认关闭，并校验路径、归属、大小和 SHA-256。

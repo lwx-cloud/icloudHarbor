@@ -446,7 +446,7 @@ wheels = [
 
 [[package]]
 name = "icloudharbor"
-version = "0.5.10"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },

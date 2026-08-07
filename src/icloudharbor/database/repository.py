@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, tuple_, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -215,6 +215,81 @@ class StateRepository:
             if not row:
                 return None
             return LocalFileState(row.relative_path, row.size, row.sha256, row.status)
+
+    def local_files_for_assets(
+        self,
+        account_id: str,
+        assets: set[tuple[str, str]],
+    ) -> dict[tuple[str, str, str, str], LocalFileState]:
+        """Load tracked resources for a planner batch in one SQLite query."""
+        if not assets:
+            return {}
+        asset_identity = tuple_(LibraryRow.remote_library_id, AssetRow.remote_asset_id)
+        statement = (
+            select(
+                LibraryRow.remote_library_id,
+                AssetRow.remote_asset_id,
+                ResourceRow.resource_type,
+                ResourceRow.version,
+                LocalFileRow.relative_path,
+                LocalFileRow.size,
+                LocalFileRow.sha256,
+                LocalFileRow.status,
+            )
+            .select_from(LocalFileRow)
+            .join(ResourceRow)
+            .join(AssetRow)
+            .join(LibraryRow)
+            .where(
+                LibraryRow.account_id == account_id,
+                asset_identity.in_(assets),
+            )
+        )
+        with self.database.sessions() as session:
+            rows = session.execute(statement)
+            return {
+                (library_id, asset_id, resource_type, version): LocalFileState(
+                    relative_path,
+                    size,
+                    sha256,
+                    status,
+                )
+                for (
+                    library_id,
+                    asset_id,
+                    resource_type,
+                    version,
+                    relative_path,
+                    size,
+                    sha256,
+                    status,
+                ) in rows
+            }
+
+    def local_file_owners_for_path(
+        self,
+        account_id: str,
+        relative_path: str,
+    ) -> set[tuple[str, str, str, str]]:
+        """Return every tracked resource that claims one destination path."""
+        statement = (
+            select(
+                LibraryRow.remote_library_id,
+                AssetRow.remote_asset_id,
+                ResourceRow.resource_type,
+                ResourceRow.version,
+            )
+            .select_from(LocalFileRow)
+            .join(ResourceRow)
+            .join(AssetRow)
+            .join(LibraryRow)
+            .where(
+                LibraryRow.account_id == account_id,
+                LocalFileRow.relative_path == relative_path,
+            )
+        )
+        with self.database.sessions() as session:
+            return {tuple(row) for row in session.execute(statement)}
 
     def record_download(
         self,

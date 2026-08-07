@@ -27,6 +27,23 @@ def verify_file(
     LOGGER.debug(
         f"校验完成：{path.name}；大小 {size}；SHA-256 {sha256[:12]}…",
     )
+    verify_metadata(
+        size,
+        sha256,
+        expected_size=expected_size,
+        expected_checksum=expected_checksum,
+    )
+    return size, sha256
+
+
+def verify_metadata(
+    size: int,
+    sha256: str,
+    *,
+    expected_size: int | None,
+    expected_checksum: str | None,
+) -> None:
+    """Validate metadata already calculated while streaming a download."""
     if expected_size is not None and size != expected_size:
         raise HarborError(
             f"资源大小不一致：期望 {expected_size}，实际 {size}",
@@ -40,4 +57,3 @@ def verify_file(
             and sha256 != normalized
         ):
             raise HarborError("资源 SHA-256 校验失败", ErrorCode.DATA_INTEGRITY_ERROR)
-    return size, sha256

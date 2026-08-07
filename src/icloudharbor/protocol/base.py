@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from datetime import datetime
 
 from icloudharbor.protocol.models import (
@@ -45,6 +46,9 @@ class ICloudProtocol(ABC):
 
     @abstractmethod
     def list_assets(self, query: AssetQuery) -> list[RemoteAsset]: ...
+
+    @abstractmethod
+    def iter_assets(self, query: AssetQuery) -> Iterator[RemoteAsset]: ...
 
     @abstractmethod
     def list_recently_deleted(self, library_id: str) -> list[RemoteAsset]: ...

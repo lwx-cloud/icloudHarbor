@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,13 +15,49 @@ from icloudharbor.config.models import DOWNLOAD_CHUNK_SIZE, AccountConfig
 from icloudharbor.database.repository import StateRepository
 from icloudharbor.download.postprocess import MediaPostProcessor
 from icloudharbor.download.retry import retry_delay
-from icloudharbor.download.verifier import verify_file
+from icloudharbor.download.verifier import verify_file, verify_metadata
 from icloudharbor.observability.paths import display_download_path
 from icloudharbor.photos.planner import DownloadTask, SyncPlan
 from icloudharbor.protocol.base import ICloudProtocol
 from icloudharbor.protocol.exceptions import ErrorCode, HarborError, ProtocolError
+from icloudharbor.protocol.models import RemoteResource
 
 LOGGER = structlog.get_logger(__name__)
+
+
+def partial_path_for(target: Path, resource: RemoteResource) -> Path:
+    """Bind resumable data to one stable remote resource identity."""
+    identity = "\0".join(
+        (
+            resource.resource_id,
+            resource.resource_type,
+            resource.version,
+            resource.checksum or "",
+            str(resource.size) if resource.size is not None else "",
+        )
+    )
+    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return target.with_name(f".{target.name}.{fingerprint}.part")
+
+
+def cleanup_stale_partials(target: Path, *, keep: Path | None = None) -> None:
+    """Remove legacy or superseded partial files for one final target."""
+    legacy = target.with_name(f"{target.name}.part")
+    prefix = f".{target.name}."
+    for candidate in target.parent.iterdir():
+        fingerprint = (
+            candidate.name[len(prefix) : -len(".part")]
+            if candidate.name.startswith(prefix) and candidate.name.endswith(".part")
+            else ""
+        )
+        managed_partial = candidate == legacy or (
+            len(fingerprint) == 16
+            and all(character in "0123456789abcdef" for character in fingerprint)
+        )
+        if not managed_partial or candidate == keep or candidate.is_symlink():
+            continue
+        if candidate.is_file():
+            candidate.unlink()
 
 
 @dataclass(slots=True, frozen=True)
@@ -171,7 +208,8 @@ class DownloadManager:
         if not target.is_relative_to(self.destination):
             raise HarborError("下载路径越过目标目录", ErrorCode.FILE_PERMISSION_ERROR)
         self.postprocessor.prepare_parent(target.parent)
-        partial = target.with_name(f"{target.name}.part")
+        partial = partial_path_for(target, task.resource)
+        cleanup_stale_partials(target, keep=partial)
         offset = partial.stat().st_size if partial.exists() else 0
 
         stream = self.protocol.open_resource(task.resource, offset=offset)
@@ -184,18 +222,30 @@ class DownloadManager:
             LOGGER.debug(f"从断点继续下载：{target.as_posix()}；已完成 {offset} 字节")
 
         mode = "ab" if offset else "wb"
+        digest = hashlib.sha256()
+        size = 0
+        if offset:
+            # Hash only the existing prefix. Newly received bytes are hashed as
+            # they are written, avoiding a second full read after download.
+            with partial.open("rb") as existing:
+                while chunk := existing.read(DOWNLOAD_CHUNK_SIZE):
+                    size += len(chunk)
+                    digest.update(chunk)
         try:
             with stream, partial.open(mode) as output:
                 for chunk in stream.iter_chunks(DOWNLOAD_CHUNK_SIZE):
                     if chunk:
                         output.write(chunk)
+                        size += len(chunk)
+                        digest.update(chunk)
                 output.flush()
                 os.fsync(output.fileno())
-            size, sha256 = verify_file(
-                partial,
+            sha256 = digest.hexdigest()
+            verify_metadata(
+                size,
+                sha256,
                 expected_size=task.resource.size,
                 expected_checksum=task.resource.checksum,
-                chunk_size=DOWNLOAD_CHUNK_SIZE,
             )
         except Exception:
             if (

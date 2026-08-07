@@ -85,14 +85,27 @@ class PathNamer:
             raise ValueError("命名模板生成了目标目录外的路径")
         return result
 
-    def resolve_conflict(self, relative: Path, asset: RemoteAsset) -> Path:
+    def resolve_conflict(
+        self,
+        relative: Path,
+        asset: RemoteAsset,
+        resource: RemoteResource | None = None,
+        *,
+        same_asset: bool = False,
+    ) -> Path:
         policy = self.account.naming.conflict_policy
         if policy == "error":
             raise FileExistsError(f"目标文件已存在：{relative}")
-        if policy == "timestamp":
-            suffix = asset.created_at.strftime("%Y%m%d_%H%M%S")
+        asset_suffix = self.short_id(asset.asset_id)
+        if same_asset and resource is not None:
+            version = sanitize_segment(resource.version).strip("_") or sanitize_segment(
+                resource.resource_type
+            ).strip("_")
+            suffix = f"{version}_{asset_suffix}"
+        elif policy == "timestamp":
+            suffix = f"{asset.created_at:%Y%m%d_%H%M%S}_{asset_suffix}"
         else:
-            suffix = self.short_id(asset.asset_id)
+            suffix = asset_suffix
         return relative.with_name(append_suffix(relative.name, suffix))
 
     @staticmethod

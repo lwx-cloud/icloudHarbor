@@ -2,6 +2,7 @@
 .github
 .venv
 .uv-cache
+.tmp
 dist
 .codex*
 .env

@@ -6,6 +6,7 @@ import os
 import shutil
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 
@@ -103,6 +104,7 @@ class PhotosEngine:
                     account,
                     library.library_id,
                     force_full_scan=False,
+                    persist_adoptions=False,
                 )
                 discovered_assets.extend(assets)
 
@@ -182,6 +184,7 @@ class PhotosEngine:
                         account,
                         library.library_id,
                         force_full_scan=force_full_scan,
+                        persist_adoptions=True,
                     )
                     cursor_updates.append((library.library_id, cursor, was_full))
                     discovered_assets.extend(assets)
@@ -204,8 +207,8 @@ class PhotosEngine:
 
                 # Process downloads in batches so each asset's download URL is
                 # consumed shortly after the iCloud scan, before it expires (410).
-                # Each batch plans and downloads atomically; cross-batch path
-                # collisions are resolved by the planner's disk-adoption logic.
+                # Each batch plans and downloads atomically; one shared path map
+                # keeps collision assignments stable across all batches.
                 batch_size = 50
                 merged_plan = SyncPlan()
                 merged_plan.warnings = list(deletion_warnings)
@@ -214,10 +217,15 @@ class PhotosEngine:
                 total_bytes = 0
                 total_skips = 0
                 total_adoptions = 0
+                reserved_paths: dict[Path, tuple[str, str, str, str]] = {}
 
                 for start in range(0, len(limited_assets), batch_size):
                     batch = limited_assets[start : start + batch_size]
-                    batch_plan = self.planner.build(batch, account)
+                    batch_plan = self.planner.build(
+                        batch,
+                        account,
+                        reserved_paths=reserved_paths,
+                    )
                     if start == 0:
                         # Rough space estimate: first batch scaled to total count.
                         self._check_plan_space(account, batch_plan)
@@ -361,6 +369,7 @@ class PhotosEngine:
         library_id: str,
         *,
         force_full_scan: bool,
+        persist_adoptions: bool,
     ) -> tuple[list[RemoteAsset], str | None, bool]:
         state = self.repository.library_state(account.id, library_id)
         if account.filters.albums or account.filters.exclude_albums:
@@ -386,12 +395,49 @@ class PhotosEngine:
             library_id,
             limit=account.filters.recent_only,
         )
-        assets = self.protocol.list_assets(query)
+        if account.filters.until_found is not None:
+            assets = self._scan_until_found(
+                account,
+                query,
+                persist_adoptions=persist_adoptions,
+            )
+        else:
+            assets = self.protocol.list_assets(query)
         if account.filters.recent_only is not None or account.filters.until_found is not None:
             # These options deliberately truncate the plan. Do not advance the
             # complete-library cursor beyond resources the user has not seen.
             return assets, None, False
         return assets, self.protocol.get_sync_cursor(library_id), True
+
+    def _scan_until_found(
+        self,
+        account: AccountConfig,
+        query: AssetQuery,
+        *,
+        persist_adoptions: bool,
+    ) -> list[RemoteAsset]:
+        """Stop remote iteration once enough consecutive tracked assets are seen."""
+        threshold = account.filters.until_found
+        assert threshold is not None
+        selected: list[RemoteAsset] = []
+        consecutive_existing = 0
+        reserved_paths: dict[Path, tuple[str, str, str, str]] = {}
+        for asset in self.protocol.iter_assets(query):
+            selected.append(asset)
+            preview = self.planner.build(
+                [asset],
+                account,
+                persist_adoptions=persist_adoptions,
+                reserved_paths=reserved_paths,
+            )
+            if preview.download_count == 0 and preview.skips:
+                consecutive_existing += 1
+                if consecutive_existing >= threshold:
+                    LOGGER.info(f"连续遇到 {threshold} 个已有项目，提前结束 iCloud 扫描")
+                    break
+            else:
+                consecutive_existing = 0
+        return selected
 
     def _scan_filtered_library(
         self,
@@ -474,11 +520,13 @@ class PhotosEngine:
 
         selected: list[RemoteAsset] = []
         consecutive_existing = 0
+        reserved_paths: dict[Path, tuple[str, str, str, str]] = {}
         for asset in ordered:
             preview = self.planner.build(
                 [asset],
                 account,
                 persist_adoptions=persist_adoptions,
+                reserved_paths=reserved_paths,
             )
             selected.append(asset)
             if preview.download_count == 0 and preview.skips:

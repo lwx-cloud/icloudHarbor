@@ -10,7 +10,7 @@ Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文�
 本项目参考了 [docker-icloudpd](https://github.com/boredazfcuk/docker-icloudpd) 的容器化备份
 思路，但为独立实现。
 
-> 当前源码版本：`0.5.10`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
+> 当前源码版本：`0.6.0`。项目不提供 Web 页面，也不会删除 iCloud 中的内容。
 
 [快速开始](#快速开始) · [通知](#通知) · [常用命令](#常用命令) ·
 [完整参数](CONFIGURATION.md) · [更新](#更新)
@@ -19,8 +19,10 @@ Live Photo 和 RAW 资源从 iCloud 下载到本地，支持断点续传、文�
 
 - 支持个人图库、共享图库和相册筛选；
 - 支持照片、视频、Live Photo、RAW/JPEG、原片与编辑版；
-- 使用 SQLite 保存状态；下载连接中断时丢弃旧连接，并从 `.part` 断点继续；
-- 下载完成后校验大小和 SHA-256，再原子写入正式文件；
+- 使用 SQLite 按 Asset ID 保存状态；容器重启后已下载文件不会重复下载；
+- 下载时同步计算 SHA-256，资源身份相同才续传 `.part`，校验后原子写入正式文件；
+- 同名 Asset 和同一 Asset 的多尺寸资源使用稳定冲突路径，不覆盖也不永久跳过；
+- 可选在连续遇到已有项目后立即停止 iCloud 分页，加快日常扫描；
 - Apple 临时下载地址返回 410 时自动重新获取最新地址；
 - 恢复 iCloud 拍摄时间，兼容 Synology Photos 索引；
 - 支持 Bark、Server酱、Telegram、企业微信和 Webhook；
@@ -227,6 +229,10 @@ docker compose exec icloudharbor icloudharbor --version
 
 一键部署脚本只用于首次生成文件，会覆盖 `.env` 和 `docker-compose.yaml`，不要把它当作
 更新命令。Docker Hub 镜像只有在 GitHub 的 `v*` 版本标签触发发布工作流后才会更新。
+
+从 0.5.x 升级到 0.6.0 不需要重建数据库。为了补回旧版本可能跳过的极少数同名 Asset，升级后
+建议临时删除 `IH_UNTIL_FOUND`，完整同步一次，再恢复该参数。0.6.0 的断点文件绑定远端资源
+身份；升级时遗留的旧格式 `.part` 不会续传，以免把旧资源片段接到新文件。
 
 ## 故障排查
 

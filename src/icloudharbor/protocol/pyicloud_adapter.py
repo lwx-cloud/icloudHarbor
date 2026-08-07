@@ -46,7 +46,7 @@ LOGGER = structlog.get_logger(__name__)
 
 
 class PyicloudProtocolAdapter(ICloudProtocol):
-    capability_version = "pyicloud-2.6.5/libraries-albums-cursor-reconcile"
+    capability_version = "pyicloud-2.6.5/libraries-albums-cursor-streaming"
 
     def __init__(
         self,
@@ -227,11 +227,15 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             raise self._map_exception(exc) from exc
 
     def list_assets(self, query: AssetQuery) -> list[RemoteAsset]:
+        return list(self.iter_assets(query))
+
+    def iter_assets(self, query: AssetQuery) -> Iterator[RemoteAsset]:
+        """Yield normalized assets lazily so callers can stop CloudKit paging early."""
         api = self._require_api()
         try:
             library = api.photos.libraries.get(query.library_id)
             if library is None:
-                return []
+                return
             if query.album_id:
                 albums = getattr(library, "albums", None)
                 if albums is None and query.library_id == "root":
@@ -257,7 +261,6 @@ class PyicloudProtocolAdapter(ICloudProtocol):
             else:
                 sources = tuple(library.albums)
 
-            result: list[RemoteAsset] = []
             seen: set[str] = set()
             for source in sources:
                 for asset in source:
@@ -265,10 +268,9 @@ class PyicloudProtocolAdapter(ICloudProtocol):
                     if normalized.asset_id in seen:
                         continue
                     seen.add(normalized.asset_id)
-                    result.append(normalized)
-                    if query.limit is not None and len(result) >= query.limit:
-                        return result
-            return result
+                    yield normalized
+                    if query.limit is not None and len(seen) >= query.limit:
+                        return
         except ProtocolError:
             raise
         except Exception as exc:
@@ -696,14 +698,16 @@ class PyicloudProtocolAdapter(ICloudProtocol):
         is_video = PyicloudProtocolAdapter._is_video(filename)
         if is_live_photo and (is_video or key.endswith("_video")):
             return "live_photo_video"
-        if is_live_photo and key == "original":
+        if "raw" in key or lower.endswith(
+            (".dng", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".orf", ".raf", ".rw2", ".pef", ".arw")
+        ):
+            return "raw_original"
+        if is_live_photo and key in {"original", "medium", "medium_size", "thumb", "thumbnail"}:
             return "live_photo_image"
         if key in {"alternative", "jpeg_alternative"}:
             return "jpeg_alternative"
         if key in {"sidecar", "xmp_sidecar"}:
             return "xmp_sidecar"
-        if "raw" in key or lower.endswith((".dng", ".cr2", ".nef", ".arw")):
-            return "raw_original"
         if "adjust" in key:
             return "video_adjusted" if is_video else "photo_adjusted"
         if key in {"medium_image"}:

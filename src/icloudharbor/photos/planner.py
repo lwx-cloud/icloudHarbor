@@ -12,6 +12,8 @@ from icloudharbor.photos.naming import PathNamer
 from icloudharbor.photos.policies import asset_allowed, select_resources
 from icloudharbor.protocol.models import RemoteAsset, RemoteResource
 
+ResourceIdentity = tuple[str, str, str, str]
+
 
 @dataclass(slots=True, frozen=True)
 class DownloadTask:
@@ -70,11 +72,16 @@ class AssetPlanner:
         account: AccountConfig,
         *,
         persist_adoptions: bool = True,
+        reserved_paths: dict[Path, ResourceIdentity] | None = None,
     ) -> SyncPlan:
         plan = SyncPlan()
         namer = PathNamer(account)
-        reserved: set[Path] = set()
+        reserved = reserved_paths if reserved_paths is not None else {}
         destination = account.destination.path
+        local_files = self.repository.local_files_for_assets(
+            account.id,
+            {(asset.library_id, asset.asset_id) for asset in assets},
+        )
 
         for asset in assets:
             if not asset_allowed(asset, account):
@@ -83,27 +90,80 @@ class AssetPlanner:
             if not resources:
                 plan.warnings.append(f"Asset {asset.asset_id} 没有符合策略的资源")
             for resource in resources:
-                relative = namer.relative_path(asset, resource)
-                state = self.repository.get_local_file(
-                    account.id,
+                identity: ResourceIdentity = (
                     asset.library_id,
                     asset.asset_id,
                     resource.resource_type,
                     resource.version,
                 )
+                base_relative = namer.relative_path(asset, resource)
+                relative = base_relative
+                state = local_files.get(
+                    (
+                        asset.library_id,
+                        asset.asset_id,
+                        resource.resource_type,
+                        resource.version,
+                    )
+                )
                 if state:
                     relative = Path(state.relative_path)
+                    owner = reserved.get(relative)
+                    if owner is not None and owner != identity:
+                        relative = self._conflict_path(
+                            namer,
+                            destination,
+                            base_relative,
+                            asset,
+                            resource,
+                            reserved,
+                            same_asset=owner[1] == asset.asset_id,
+                        )
+                        plan.updates.append(DownloadTask(asset, resource, relative, repair=True))
+                        reserved[relative] = identity
+                        continue
                     task = DownloadTask(asset, resource, relative)
                     if self._is_complete(destination / relative, state, resource):
                         plan.skips.append(task)
-                        reserved.add(relative)
+                        reserved[relative] = identity
                         continue
                     plan.updates.append(DownloadTask(asset, resource, relative, repair=True))
-                    reserved.add(relative)
+                    reserved[relative] = identity
                     continue
 
+                owner = reserved.get(relative)
+                if owner is not None and owner != identity:
+                    relative = self._conflict_path(
+                        namer,
+                        destination,
+                        base_relative,
+                        asset,
+                        resource,
+                        reserved,
+                        same_asset=owner[1] == asset.asset_id,
+                    )
                 candidate = destination / relative
-                if relative in reserved or candidate.exists():
+                if candidate.is_file() and relative not in reserved:
+                    database_owners = self.repository.local_file_owners_for_path(
+                        account.id,
+                        relative.as_posix(),
+                    )
+                    foreign_owner = next(
+                        (path_owner for path_owner in database_owners if path_owner != identity),
+                        None,
+                    )
+                    if foreign_owner is not None:
+                        relative = self._conflict_path(
+                            namer,
+                            destination,
+                            base_relative,
+                            asset,
+                            resource,
+                            reserved,
+                            same_asset=foreign_owner[1] == asset.asset_id,
+                        )
+                        candidate = destination / relative
+                if candidate.exists():
                     # 磁盘上已有文件, 直接认领到数据库避免重下.
                     # 不要求远端 size 匹配: 远端可能不返回 size,
                     # 且网络文件系统的 stat 可能不准确.
@@ -121,23 +181,63 @@ class AssetPlanner:
                         task = DownloadTask(asset, resource, relative)
                         plan.skips.append(task)
                         plan.adoptions.append(task)
-                        reserved.add(relative)
-                        continue
-                    # Same-run conflict: another resource already claimed this path.
-                    # Skip instead of renaming — the skipped resource will be
-                    # adopted from disk during the next formal synchronization.
-                    if relative in reserved:
+                        reserved[relative] = identity
                         continue
                     # Disk conflict: path exists as something other than a regular
                     # file (e.g. a directory with the same name).
-                    relative = namer.resolve_conflict(relative, asset)
-                    counter = 2
-                    while relative in reserved or (destination / relative).exists():
-                        relative = relative.with_name(f"{relative.stem}_{counter}{relative.suffix}")
-                        counter += 1
-                reserved.add(relative)
+                    relative = self._conflict_path(
+                        namer,
+                        destination,
+                        base_relative,
+                        asset,
+                        resource,
+                        reserved,
+                        same_asset=False,
+                    )
+                    candidate = destination / relative
+                    if candidate.is_file():
+                        sha256_hash = file_sha256(candidate)
+                        if persist_adoptions:
+                            self.repository.record_download(
+                                asset,
+                                resource,
+                                str(relative).replace("\\", "/"),
+                                candidate.stat().st_size,
+                                sha256_hash,
+                            )
+                        task = DownloadTask(asset, resource, relative)
+                        plan.skips.append(task)
+                        plan.adoptions.append(task)
+                        reserved[relative] = identity
+                        continue
+                reserved[relative] = identity
                 plan.downloads.append(DownloadTask(asset, resource, relative))
         return plan
+
+    @staticmethod
+    def _conflict_path(
+        namer: PathNamer,
+        destination: Path,
+        relative: Path,
+        asset: RemoteAsset,
+        resource: RemoteResource,
+        reserved: dict[Path, ResourceIdentity],
+        *,
+        same_asset: bool,
+    ) -> Path:
+        candidate = namer.resolve_conflict(
+            relative,
+            asset,
+            resource,
+            same_asset=same_asset,
+        )
+        counter = 2
+        while candidate in reserved or (
+            (destination / candidate).exists() and not (destination / candidate).is_file()
+        ):
+            candidate = candidate.with_name(f"{candidate.stem}_{counter}{candidate.suffix}")
+            counter += 1
+        return candidate
 
     def add_local_deletions(
         self,
@@ -174,12 +274,11 @@ class AssetPlanner:
         actual_size = path.stat().st_size
         if actual_size != state.size:
             return False
-        if resource.size is not None and actual_size != resource.size:
-            return False
-        expected_hash = state.sha256
-        if expected_hash:
-            return file_sha256(path) == expected_hash
-        return True
+        # Match iCloudPD's hot-path behavior: an already tracked regular file
+        # with the recorded/remote size is considered present. SHA-256 is
+        # calculated once during download or adoption and checked again only
+        # before destructive local cleanup, not on every synchronization.
+        return resource.size is None or actual_size == resource.size
 
 
 def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:

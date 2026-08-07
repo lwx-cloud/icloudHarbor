@@ -9,6 +9,7 @@ import structlog
 
 from icloudharbor.config.models import DOWNLOAD_CHUNK_SIZE, AccountConfig
 from icloudharbor.database.repository import ManagedLocalFile, StateRepository
+from icloudharbor.download.manager import cleanup_stale_partials
 from icloudharbor.download.verifier import verify_file
 from icloudharbor.observability.paths import display_host_path
 from icloudharbor.photos.planner import LocalDeletionTask
@@ -229,8 +230,4 @@ class LocalDeletionManager:
 
     @staticmethod
     def _delete_partial(target: Path) -> None:
-        partial = target.with_name(f"{target.name}.part")
-        if partial.is_symlink():
-            return
-        if partial.is_file():
-            partial.unlink()
+        cleanup_stale_partials(target)
