@@ -45,7 +45,7 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 
 ## 2. 当前支持范围
 
-当前源码版本为 `0.6.0`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
+当前源码版本为 `0.6.1`；是否已经发布到 Docker Hub 以 Git tag 和发布工作流为准。源码支持：
 
 - 一个启用的 Apple Account。
 - 默认账号 ID 和终端、通知中的显示名称都直接使用 `IH_APPLE_ID`；只有显式设置
@@ -54,7 +54,9 @@ iCloudHarbor 的生产部署只支持 Docker，主要面向 Linux、群晖等 NA
 - 中国大陆和全球 iCloud 服务端点；`region` 必须显式选择 `global` 或 `china`，不再自动猜测。
 - Apple 双重认证验证码。
 - Docker 首次启动时从 `IH_*` 参数自动生成 `/config/config.yaml`；后续启动会校验已有 YAML，
-  并把非空环境变量的有效覆盖值原子同步写回，未覆盖的高级字段保持不变，通知 Secret 不落入 YAML。
+  把当前非空环境变量的有效覆盖值原子同步写回，并用只含参数名的隐藏状态文件识别后来被删除或
+  清空的环境变量，将对应字段恢复默认值；从未由环境变量管理的高级字段保持不变，通知 Secret
+  不落入 YAML 或环境覆盖状态文件。
 - `deploy/install.sh` 是无交互部署文件生成器：以执行命令时的当前目录为部署目录，只创建
   `config/`、默认 `.env` 和 `docker-compose.yaml`，不检查 Docker、不创建配置子目录或照片
   挂载标记，也不拉取镜像、启动容器、运行状态检查或认证。
@@ -139,8 +141,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 
 1. `docker/entrypoint.sh` 校验 UID 和 GID，固定 umask 0022。
 2. 把 `/config` 根目录和应用管理的运行目录交给配置的非 root UID/GID，并收紧私有目录权限。
-3. 执行隐藏内部入口 `icloudharbor bootstrap`：配置不存在时生成，存在时校验并同步非空 `IH_*`
-   环境变量覆盖值。
+3. 执行隐藏内部入口 `icloudharbor bootstrap`：配置不存在时生成，存在时校验并同步当前非空
+   `IH_*` 环境变量覆盖值；曾由环境变量管理但后来被删除的字段恢复默认值。
 4. 以配置的非 root UID/GID 启动 `tini` 和 `icloudharbor daemon`。
 5. 调度器按 Cron/间隔触发同步，并每秒接收认证进程写入 SQLite 的立即同步请求；同一账号
    最多运行一个认证或同步操作。
@@ -237,6 +239,7 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 ```text
 /config/
 ├── config.yaml
+├── .config.yaml.environment-overrides.json  # 仅记录由 Docker 环境管理的参数名
 ├── credentials/
 │   ├── vault.key
 │   └── <account-id>.json
@@ -270,6 +273,8 @@ protocol.base + protocol.models ◄── protocol.pyicloud_adapter
 - 挂载标记必须位于实际 `destination.path` 内，是防止卷未挂载时误写容器层的保护，不得
   通过删除检查或更改常量绕过。
 - Apple 密码不会进入 `.env`、Compose 或命令参数。
+- 环境覆盖状态文件只能记录可恢复默认值的 `IH_*` 参数名，不得记录参数值、Apple Account、通知
+  Secret 或其他凭据；删除或损坏该文件会丢失环境变量删除历史，但不得因此猜测重置高级 YAML。
 - 一键安装器不得读取 `/dev/tty` 或标准输入，不得询问任何参数；只在结束时输出一次成功或
   失败。安装目录固定为执行命令时的当前目录，不提供路径探测、旧项目识别或容器接管。
 - 安装器只创建当前目录的 `config/`，不得预建数据库、Session、凭据、锁等子目录，不得创建
@@ -473,6 +478,9 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
   文件绑定资源指纹。修复同名不同 Asset、跨 50 项下载批次和同一 Asset 多尺寸资源被永久跳过
   或错误共用路径的问题，冲突项使用确定后缀并可在数据库丢失后重新认领。RAW/JPEG 按真实
   类型选择，两个偏好模式在首选缺失时回退。
+- 2026-08-07 的 0.6.1 环境变量删除同步：Docker bootstrap 使用只记录参数名的隐藏状态文件
+  跟踪由 `.env` 管理的字段；参数被删除或清空后恢复程序默认值，从未由环境变量管理的高级
+  YAML 字段保持不变。状态文件不保存邮箱、Secret、Token 或参数值。
 - amd64/arm64 镜像构建结果以对应 GitHub Actions 发布提交为准。
 
 主要外部风险是 Apple 私有接口与返回字段可能变化。出现协议异常时，应先在
@@ -502,7 +510,7 @@ Compose 校验要求仓库根目录已有 `.env`；缺少时可从 `.env.example
 - 发布时先同步 `pyproject.toml` 与 `src/icloudharbor/__init__.py`，再运行 `uv lock` 更新
   `uv.lock`；同时更新 `.env.example`、`README.md` 与本文件中的展示版本，并全仓搜索旧版本号。
 - 本地完整门禁通过后创建带说明的版本标签，只推送目标标签，例如
-  `git push origin v0.6.0`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
+  `git push origin v0.6.1`。不要使用 `git push --tags`：本地存在而远端已不存在的旧标签可能
   重新触发发布并把 `latest` 回退。
 - 从 `v0.3.4` 起发布工作流只生成完整版本号和 `latest` 两个 Docker Hub 标签，不再生成
   `0.3` 和 `sha-*` 标签。

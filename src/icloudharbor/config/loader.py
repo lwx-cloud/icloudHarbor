@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
-from icloudharbor.config.models import AppConfig
+from icloudharbor.config.models import (
+    AppConfig,
+    DestinationConfig,
+    DownloadConfig,
+    FilterConfig,
+    MediaConfig,
+    NamingConfig,
+    NotificationsConfig,
+    RuntimeConfig,
+    SyncConfig,
+)
 
 DEFAULT_CONFIG_PATH = Path("/config/config.yaml")
+ENVIRONMENT_OVERRIDE_STATE_VERSION = 1
 
 Parser = Callable[[str], object]
 
@@ -127,6 +140,16 @@ NOTIFICATION_ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Parser], ...] = (
     ("IH_NOTIFY_DAYS", ("notification_days",), _parse_int),
 )
 
+RESETTABLE_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        *(name for name, _, _ in RUNTIME_ENV_OVERRIDES),
+        *(name for name, _, _ in ACCOUNT_ENV_OVERRIDES if name != "IH_APPLE_ID"),
+        *(name for name, _, _ in NOTIFICATION_ENV_OVERRIDES),
+        "IH_SYNC_INTERVAL",
+        "IH_NOTIFY",
+    }
+)
+
 NOTIFICATION_TYPES = frozenset({"bark", "serverchan", "telegram", "wecom", "webhook"})
 NOTIFICATION_SECRET_FILES = {
     "bark": "/config/notification-keys/bark-key",
@@ -205,6 +228,8 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
     """Create YAML initially and persist effective Docker overrides thereafter."""
 
     resolved = config_path_from_env(path)
+    previous_environment = _read_environment_override_state(resolved)
+    current_environment = _managed_environment_variables()
     if resolved.is_file():
         existing_data = _read_config_data(resolved)
         try:
@@ -214,10 +239,19 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
             # left in an older YAML file. The effective configuration is still
             # validated below before anything is replaced on disk.
             persisted_config = None
+        _reset_removed_environment_overrides(
+            existing_data,
+            previous_environment - current_environment,
+        )
         apply_environment_overrides(existing_data)
         config = AppConfig.model_validate(existing_data)
         if config != persisted_config:
             _write_config_atomic(resolved, config_snapshot(config))
+        _write_environment_override_state_if_changed(
+            resolved,
+            previous_environment,
+            current_environment,
+        )
         return config, False
 
     _reject_unsupported_environment_variables()
@@ -260,7 +294,81 @@ def bootstrap_config(path: Path | None = None) -> tuple[AppConfig, bool]:
     apply_environment_overrides(data)
     config = AppConfig.model_validate(data)
     _write_config_atomic(resolved, config_snapshot(config))
+    _write_environment_override_state(resolved, current_environment)
     return config, True
+
+
+def _managed_environment_variables() -> set[str]:
+    return {
+        name for name in RESETTABLE_ENVIRONMENT_VARIABLES if _environment_value(name) is not None
+    }
+
+
+def _reset_removed_environment_overrides(
+    data: dict[str, Any],
+    removed: set[str],
+) -> None:
+    """Return fields formerly managed by Docker environment to safe defaults."""
+
+    if not removed:
+        return
+
+    runtime = _mapping(data, "runtime")
+    runtime_defaults = RuntimeConfig().model_dump(mode="json")
+    for name, path, _ in RUNTIME_ENV_OVERRIDES:
+        if name in removed:
+            _set_nested(runtime, path, deepcopy(_nested_value(runtime_defaults, path)))
+
+    removed_account = removed & {
+        name for name, _, _ in ACCOUNT_ENV_OVERRIDES if name != "IH_APPLE_ID"
+    }
+    if "IH_SYNC_INTERVAL" in removed:
+        removed_account.add("IH_SYNC_INTERVAL")
+    if removed_account:
+        account = _single_account(data)
+        apple_id = account.get("apple_id")
+        if not isinstance(apple_id, str) or not apple_id:
+            raise ValueError("恢复已删除的账号环境变量时，YAML accounts[0].apple_id 必须有效")
+        account_defaults: dict[str, Any] = {
+            "id": apple_id,
+            "name": apple_id,
+            "region": "global",
+            "libraries": ["root"],
+            "destination": DestinationConfig(path=Path("/photos")).model_dump(mode="json"),
+            "media": MediaConfig().model_dump(mode="json"),
+            "filters": FilterConfig().model_dump(mode="json"),
+            "naming": NamingConfig().model_dump(mode="json"),
+            "sync": SyncConfig().model_dump(mode="json"),
+            "download": DownloadConfig().model_dump(mode="json"),
+        }
+        for name, path, _ in ACCOUNT_ENV_OVERRIDES:
+            if name in removed_account:
+                _set_nested(account, path, deepcopy(_nested_value(account_defaults, path)))
+        if "IH_SYNC_INTERVAL" in removed_account:
+            _mapping(account, "sync")["schedule"] = "24h"
+
+    notifications = _mapping(data, "notifications")
+    notification_defaults = NotificationsConfig().model_dump(mode="json")
+    if "IH_NOTIFY" in removed:
+        notifications.clear()
+        notifications.update(deepcopy(notification_defaults))
+        notifications.update(
+            {
+                "startup": False,
+                "success": False,
+                "failure": False,
+                "auth_required": False,
+                "channels": [],
+            }
+        )
+    else:
+        for name, path, _ in NOTIFICATION_ENV_OVERRIDES:
+            if name in removed:
+                _set_nested(
+                    notifications,
+                    path,
+                    deepcopy(_nested_value(notification_defaults, path)),
+                )
 
 
 def apply_environment_overrides(data: dict[str, Any]) -> None:
@@ -279,12 +387,7 @@ def apply_environment_overrides(data: dict[str, Any]) -> None:
         account_names.add("IH_SYNC_INTERVAL")
 
     if account_names:
-        accounts = data.get("accounts")
-        if not isinstance(accounts, list) or len(accounts) != 1:
-            raise ValueError("账号环境变量覆盖要求 YAML 中恰好有一个账号")
-        account = accounts[0]
-        if not isinstance(account, dict):
-            raise ValueError("YAML accounts[0] 必须是对象")
+        account = _single_account(data)
         _apply_mapping(account, ACCOUNT_ENV_OVERRIDES)
         apple_id = _environment_value("IH_APPLE_ID")
         if apple_id is not None:
@@ -472,6 +575,25 @@ def _set_nested(target: dict[str, Any], path: tuple[str, ...], value: object) ->
     node[path[-1]] = value
 
 
+def _nested_value(source: dict[str, Any], path: tuple[str, ...]) -> object:
+    node: object = source
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            raise RuntimeError(f"内部默认配置缺少字段：{'.'.join(path)}")
+        node = node[key]
+    return node
+
+
+def _single_account(data: dict[str, Any]) -> dict[str, Any]:
+    accounts = data.get("accounts")
+    if not isinstance(accounts, list) or len(accounts) != 1:
+        raise ValueError("账号环境变量覆盖要求 YAML 中恰好有一个账号")
+    account = accounts[0]
+    if not isinstance(account, dict):
+        raise ValueError("YAML accounts[0] 必须是对象")
+    return account
+
+
 def _mapping(target: dict[str, Any], key: str) -> dict[str, Any]:
     value = target.setdefault(key, {})
     if not isinstance(value, dict):
@@ -488,7 +610,58 @@ def _read_config_data(path: Path) -> dict[str, Any]:
     return raw
 
 
+def _environment_override_state_path(config_path: Path) -> Path:
+    return config_path.with_name(f".{config_path.name}.environment-overrides.json")
+
+
+def _read_environment_override_state(config_path: Path) -> set[str]:
+    state_path = _environment_override_state_path(config_path)
+    if not state_path.is_file():
+        return set()
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"环境变量覆盖状态文件无效：{state_path}") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"version", "managed"}
+        or payload.get("version") != ENVIRONMENT_OVERRIDE_STATE_VERSION
+        or not isinstance(payload.get("managed"), list)
+        or not all(isinstance(name, str) for name in payload["managed"])
+    ):
+        raise ValueError(f"环境变量覆盖状态文件无效：{state_path}")
+    managed = set(payload["managed"])
+    unknown = managed - RESETTABLE_ENVIRONMENT_VARIABLES
+    if unknown:
+        names = "、".join(sorted(unknown))
+        raise ValueError(f"环境变量覆盖状态文件包含未知参数：{names}")
+    return managed
+
+
+def _write_environment_override_state_if_changed(
+    config_path: Path,
+    previous: set[str],
+    current: set[str],
+) -> None:
+    state_path = _environment_override_state_path(config_path)
+    if previous != current or not state_path.is_file():
+        _write_environment_override_state(config_path, current)
+
+
+def _write_environment_override_state(config_path: Path, managed: set[str]) -> None:
+    payload = {
+        "version": ENVIRONMENT_OVERRIDE_STATE_VERSION,
+        "managed": sorted(managed),
+    }
+    content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    _write_text_atomic(_environment_override_state_path(config_path), content)
+
+
 def _write_config_atomic(path: Path, content: str) -> None:
+    _write_text_atomic(path, content)
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     descriptor: int | None = None

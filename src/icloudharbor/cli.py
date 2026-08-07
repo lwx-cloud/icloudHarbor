@@ -143,7 +143,7 @@ def bootstrap(ctx: typer.Context) -> None:
     if created:
         typer.echo(f"已自动生成配置：{ctx.obj}（账号数={len(config.accounts)}）")
     else:
-        typer.echo(f"现有配置有效：{ctx.obj}（已同步非空 IH_* 参数）")
+        typer.echo(f"现有配置有效：{ctx.obj}（已同步 IH_* 参数）")
 
 
 def _authenticate_account(
